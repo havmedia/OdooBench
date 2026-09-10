@@ -113,7 +113,54 @@ sequence.
 | `search` | Filters a list by a date range, keeps the model's order | Whether the database walks the index or reads the table. Orders of magnitude on a large table. |
 | `office-day` | 99 list views for every filtered search | Both bottlenecks, in the order they appear. The realistic one. |
 | `month-end` | Groups a month of records | Whether an aggregation fits in the memory the database may use for one. |
+| `report` | Prints a document twice, as HTML and as PDF | How long a document takes, and how much of it is the PDF engine rather than Odoo. |
+| `report-pdf` | Prints documents as PDF, in batches if asked | What a printing run costs, which is a different question from what one document costs. |
 | `flat` | Sorts by a column with no index | Nothing, deliberately. The control: if this moves between two configurations, something other than the database changed. |
+
+## Printing documents
+
+Reports are the other half of an Odoo's work, and they behave nothing like list
+views. One report is a single long request that renders a template, runs its
+queries and then hands the result to an external program.
+
+Find out what your instance can print, and whether it has anything to print:
+
+```
+odoobench reports --url http://10.0.0.5:8069 --db production
+```
+
+```
+report                                    prints              records
+account.report_invoice                    account.move              0
+account_followup.report_followup_print_all res.partner       25116540
+sale.report_saleorder                     sale.order                0
+```
+
+Then measure one:
+
+```
+odoobench run --url http://10.0.0.5:8069 --db production \
+              --scenario report --report account_followup.report_followup_print_all \
+              --users 2 --duration 60
+```
+
+The `report` scenario prints each document twice, once as HTML and once as PDF,
+and reports the two separately. On the instance above:
+
+```
+  html_x1             37.9 ms
+  pdf_x1            2211.2 ms
+```
+
+Thirty-eight milliseconds of Odoo, and two and a fifth seconds of wkhtmltopdf.
+Adding worker processes would not have moved that, and neither would touching the
+database. Without the split you would have had a slow report and no idea which
+half to go and fix.
+
+Use `--report-batch 20` to print twenty records into one document, which is the
+month-end print run rather than one invoice. Reports are also the request most
+likely to run into a worker's time or memory limit, so errors in this scenario
+are a finding rather than noise.
 
 ## The rules it follows
 

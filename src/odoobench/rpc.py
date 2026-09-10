@@ -72,6 +72,26 @@ class Session:
             raise RpcError(_short(payload["error"]))
         return payload.get("result")
 
+    def fetch(self, path: str) -> bytes:
+        """A plain GET with the session cookie, for the routes that return files.
+
+        Reports do not come back over JSON-RPC. The web client asks for them at
+        `/report/<converter>/<name>/<ids>` and gets a document, which is why this
+        is the one place OdooBench leaves call_kw behind.
+        """
+        request = urllib.request.Request(self.url + path, method="GET")
+        try:
+            with self._opener.open(request, timeout=self.timeout) as response:
+                body = response.read()
+        except urllib.error.HTTPError as exc:
+            raise RpcError("HTTP %s on %s" % (exc.code, path)) from exc
+        except Exception as exc:  # noqa: BLE001 - transport failures are results too
+            raise RpcError("%s on %s" % (exc, path)) from exc
+
+        if not body:
+            raise RpcError("empty document from %s" % path)
+        return body
+
     def call_kw(
         self,
         model: str,

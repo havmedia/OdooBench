@@ -13,9 +13,15 @@ from typing import Any, Dict, List, Optional
 
 
 class FakeOdoo:
-    def __init__(self, password: str = "secret", fail_every: int = 0) -> None:
+    def __init__(
+        self,
+        password: str = "secret",
+        fail_every: int = 0,
+        document: bytes = b"%PDF-1.4 pretend",
+    ) -> None:
         self.password = password
         self.fail_every = fail_every
+        self.document = document
         self.calls: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
         self._count = 0
@@ -43,6 +49,18 @@ class FakeOdoo:
             return {"error": {"message": "server is busy", "code": 500}}
 
         method = params.get("method")
+        if params.get("model") == "ir.actions.report" and method == "search_read":
+            return {
+                "result": [
+                    {
+                        "id": 7,
+                        "report_name": "sale.report_saleorder",
+                        "model": "sale.order",
+                        "report_type": "qweb-pdf",
+                        "name": "Quotation",
+                    }
+                ]
+            }
         if method == "search_count":
             return {"result": 4711}
         if method == "read_group":
@@ -64,6 +82,16 @@ class FakeOdoo:
                 self.end_headers()
                 self.wfile.write(encoded)
 
+            def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+                with outer._lock:
+                    outer.calls.append({"path": self.path, "params": {}})
+                body = outer.document
+                self.send_response(200 if body else 500)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def log_message(self, *_args: Any) -> None:
                 pass
 
@@ -76,6 +104,9 @@ class FakeOdoo:
         assert self._server is not None
         self._server.shutdown()
         self._server.server_close()
+
+    def report_paths(self) -> List[str]:
+        return [call["path"] for call in self.calls if call["path"].startswith("/report/")]
 
     def call_kw_payloads(self) -> List[Dict[str, Any]]:
         return [call["params"] for call in self.calls if call["path"] == "/web/dataset/call_kw"]

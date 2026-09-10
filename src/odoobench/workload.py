@@ -37,6 +37,13 @@ class Target:
     last_date: date = date(2026, 1, 1)
     unsorted_field: str = "email"
 
+    #: Set by `--report`. Which document to render, on how many records at once,
+    #: and the pool of record ids to draw from.
+    report_name: str = ""
+    report_model: str = ""
+    report_ids: List[int] = field(default_factory=list)
+    report_batch: int = 1
+
     @property
     def span_days(self) -> int:
         return max(1, (self.last_date - self.first_date).days)
@@ -185,6 +192,54 @@ def unsorted_scan(target: Target, days: int = 30) -> Operation:
         return "unsorted"
 
     return Operation("unsorted_scan", 1, call)
+
+
+def find_report(session: Session, report_name: str) -> dict:
+    """Look the report up the way the interface does, to learn its model."""
+    rows = session.search_read(
+        "ir.actions.report",
+        [["report_name", "=", report_name]],
+        ["report_name", "model", "report_type", "name"],
+        limit=1,
+        order="id asc",
+    )
+    if not rows:
+        raise LookupError("no report named %r on this instance" % report_name)
+    return rows[0]
+
+
+def sample_ids(session: Session, model: str, limit: int = 200) -> List[int]:
+    rows = session.search_read(model, [], ["id"], limit=limit, offset=0, order="id asc")
+    return [int(row["id"]) for row in rows]
+
+
+def render_report(target: Target, converter: str) -> Operation:
+    """Render a document, the way the print button does.
+
+    Two converters, and the difference between them is the point. `html` runs
+    Odoo's own template engine and the queries behind it. `pdf` does all of that
+    and then hands the result to wkhtmltopdf, an external program that has to be
+    started, fed and waited for. Measuring both says how much of a slow report is
+    Odoo and how much is the PDF engine, which are fixed in completely different
+    places.
+    """
+    if not target.report_name:
+        raise SystemExit("this scenario needs --report, for example --report account.report_invoice")
+    if not target.report_ids:
+        raise SystemExit("no records found for report %r" % target.report_name)
+
+    batch = max(1, target.report_batch)
+
+    def call(session: Session, rng: random.Random) -> Optional[str]:
+        pool = target.report_ids
+        chosen = rng.sample(pool, batch) if len(pool) >= batch else list(pool)
+        session.fetch(
+            "/report/%s/%s/%s"
+            % (converter, target.report_name, ",".join(str(value) for value in chosen))
+        )
+        return "%s_x%d" % (converter, batch)
+
+    return Operation("render_%s" % converter, 1, call)
 
 
 def weighted(operations: List[Operation]) -> List[Operation]:

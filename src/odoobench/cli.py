@@ -64,6 +64,9 @@ def command_run(args: argparse.Namespace) -> int:
         except RpcError as exc:
             print("  probe failed (%s), keeping the given range" % exc, file=sys.stderr)
 
+    if args.scenario.startswith("report"):
+        target = _prepare_report(probe_session, target, args)
+
     config = RunConfig(
         concurrency=args.users,
         warmup_seconds=args.warmup,
@@ -107,6 +110,81 @@ def command_run(args: argparse.Namespace) -> int:
         print("written to %s" % args.out, file=sys.stderr)
 
     print(report.to_json(payload) if args.json else report.to_text(payload))
+    return 0
+
+
+def _prepare_report(session: Session, target: Target, args: argparse.Namespace) -> Target:
+    """Find the report, its model and enough records to draw from."""
+    if not args.report:
+        raise SystemExit(
+            "the %s scenario needs --report. Run `odoobench reports` to see what "
+            "this instance has." % args.scenario
+        )
+    try:
+        found = workload.find_report(session, args.report)
+    except (LookupError, RpcError) as exc:
+        raise SystemExit(str(exc))
+
+    model = found.get("model") or ""
+    if not model:
+        raise SystemExit("report %r has no model to print" % args.report)
+
+    ids = workload.sample_ids(session, model, limit=args.report_sample)
+    if not ids:
+        raise SystemExit(
+            "report %r prints %s, and this instance has no %s records"
+            % (args.report, model, model)
+        )
+
+    print(
+        "  report %s prints %s, drawing from %d records"
+        % (args.report, model, len(ids)),
+        file=sys.stderr,
+    )
+    target.report_name = args.report
+    target.report_model = model
+    target.report_ids = ids
+    target.report_batch = args.report_batch
+    return target
+
+
+def command_reports(args: argparse.Namespace) -> int:
+    """List what this instance can print, and whether it has anything to print."""
+    session = _session_factory(args)()
+    try:
+        session.authenticate()
+    except RpcError as exc:
+        print("could not log in: %s" % exc, file=sys.stderr)
+        return 2
+
+    rows = session.search_read(
+        "ir.actions.report",
+        [["report_type", "in", ["qweb-pdf", "qweb-html", "qweb-text"]]],
+        ["report_name", "model", "report_type", "name"],
+        limit=args.limit,
+        order="model asc, report_name asc",
+    )
+
+    counts: Dict[str, int] = {}
+    for row in rows:
+        model = row.get("model") or ""
+        if model and model not in counts:
+            try:
+                counts[model] = int(session.search_count(model, []) or 0)
+            except RpcError:
+                counts[model] = -1
+
+    print("%-46s %-24s %10s" % ("report", "prints", "records"))
+    print("-" * 82)
+    for row in rows:
+        model = row.get("model") or ""
+        total = counts.get(model, -1)
+        print(
+            "%-46s %-24s %10s"
+            % (row["report_name"], model, "?" if total < 0 else total)
+        )
+    print("")
+    print("Pick one with records and pass it as --report.")
     return 0
 
 
@@ -190,6 +268,23 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--first-date", dest="first_date", default="")
     run_parser.add_argument("--last-date", dest="last_date", default="")
     run_parser.add_argument("--no-probe", action="store_true", help="skip reading the date range")
+    run_parser.add_argument(
+        "--report", default="", help="report_name to print, e.g. account.report_invoice"
+    )
+    run_parser.add_argument(
+        "--report-batch",
+        dest="report_batch",
+        type=int,
+        default=1,
+        help="records per printed document; raise it for a month-end print run",
+    )
+    run_parser.add_argument(
+        "--report-sample",
+        dest="report_sample",
+        type=int,
+        default=200,
+        help="how many record ids to draw from",
+    )
     run_parser.add_argument("--label", default="", help="what this run is, for the report")
     run_parser.add_argument("--out", default="", help="also write the result as JSON here")
     run_parser.add_argument("--json", action="store_true", help="print JSON instead of text")
@@ -203,12 +298,23 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = sub.add_parser("scenarios", help="what can be measured, and what it shows")
     list_parser.set_defaults(func=command_scenarios)
 
+    reports_parser = sub.add_parser("reports", help="what this instance can print")
+    reports_parser.add_argument("--url", required=True)
+    reports_parser.add_argument("--db", required=True)
+    reports_parser.add_argument("--login", default="admin")
+    reports_parser.add_argument(
+        "--password", default=os.environ.get("ODOOBENCH_PASSWORD", "")
+    )
+    reports_parser.add_argument("--timeout", type=int, default=60)
+    reports_parser.add_argument("--limit", type=int, default=60)
+    reports_parser.set_defaults(func=command_reports)
+
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if getattr(args, "command", "") == "run" and not args.password:
+    if getattr(args, "command", "") in {"run", "reports"} and not args.password:
         parser.error("a password is required: --password or ODOOBENCH_PASSWORD")
     return int(args.func(args))

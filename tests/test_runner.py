@@ -91,3 +91,36 @@ def test_no_rate_means_no_waiting():
     for _ in range(1000):
         pacer.wait()
     assert time.monotonic() - started < 0.1
+
+
+def test_a_report_is_fetched_from_the_route_the_print_button_uses():
+    with FakeOdoo() as odoo:
+        target = Target(report_name="sale.report_saleorder", report_ids=[11, 12, 13, 14])
+        run(scenarios.get("report"), target, _factory(odoo), _config(runs=1))
+
+    paths = odoo.report_paths()
+    assert paths, "no document was ever requested"
+    assert any(path.startswith("/report/pdf/sale.report_saleorder/") for path in paths)
+    assert any(path.startswith("/report/html/sale.report_saleorder/") for path in paths)
+    # One record per document unless a batch was asked for.
+    assert all("," not in path.rsplit("/", 1)[-1] for path in paths)
+
+
+def test_a_batch_prints_several_records_in_one_request():
+    with FakeOdoo() as odoo:
+        target = Target(
+            report_name="sale.report_saleorder", report_ids=list(range(1, 40)), report_batch=5
+        )
+        run(scenarios.get("report-pdf"), target, _factory(odoo), _config(runs=1))
+
+    last = odoo.report_paths()[-1].rsplit("/", 1)[-1]
+    assert len(last.split(",")) == 5
+
+
+def test_an_empty_document_counts_as_an_error():
+    with FakeOdoo(document=b"") as odoo:
+        target = Target(report_name="sale.report_saleorder", report_ids=[1, 2, 3])
+        aggregate = run(scenarios.get("report-pdf"), target, _factory(odoo), _config(runs=1))
+
+    assert aggregate.requests == 0
+    assert aggregate.errors > 0

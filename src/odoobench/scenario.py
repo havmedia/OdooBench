@@ -51,6 +51,17 @@ def _flat(target: Target) -> List[Operation]:
     return [workload.unsorted_scan(target)]
 
 
+def _report(target: Target) -> List[Operation]:
+    return [
+        workload.render_report(target, converter="html"),
+        workload.render_report(target, converter="pdf"),
+    ]
+
+
+def _report_pdf(target: Target) -> List[Operation]:
+    return [workload.render_report(target, converter="pdf")]
+
+
 SCENARIOS: Dict[str, Scenario] = {
     "browse": Scenario(
         name="browse",
@@ -109,6 +120,38 @@ SCENARIOS: Dict[str, Scenario] = {
             "does not slow a server the way a hundred list views do."
         ),
         build=_month_end,
+    ),
+    "report": Scenario(
+        name="report",
+        summary="Print a document, once as HTML and once as PDF.",
+        reveals=(
+            "How long a document takes, and how much of that is Odoo against how "
+            "much is the PDF engine. The HTML pass is the template and its "
+            "queries; the PDF pass is the same work plus starting wkhtmltopdf, "
+            "feeding it and waiting. The gap between the two buckets tells you "
+            "which of the two to go and fix."
+        ),
+        blind_to=(
+            "Everything list views show. A report is one long request, not many "
+            "short ones, so it says nothing about how many people can click at "
+            "once. It is also the request most likely to hit a worker's time and "
+            "memory limits, so a failure here is a finding, not noise."
+        ),
+        build=_report,
+    ),
+    "report-pdf": Scenario(
+        name="report-pdf",
+        summary="Print documents as PDF only, in batches if you ask for them.",
+        reveals=(
+            "What a printing run costs. With --report-batch this is the month-end "
+            "print job rather than one invoice, which is where the PDF engine "
+            "stops being an afterthought and starts being the whole request."
+        ),
+        blind_to=(
+            "Where the time went inside the request. Run the `report` scenario "
+            "for that; it splits the template from the PDF engine."
+        ),
+        build=_report_pdf,
     ),
     "flat": Scenario(
         name="flat",

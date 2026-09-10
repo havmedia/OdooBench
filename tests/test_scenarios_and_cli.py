@@ -11,15 +11,32 @@ from odoobench.stats import Aggregate, RunSummary
 from odoobench.workload import Target, probe
 
 
+def _target_for(name):
+    if name.startswith("report"):
+        return Target(report_name="sale.report_saleorder", report_model="sale.order",
+                      report_ids=[1, 2, 3])
+    return Target()
+
+
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
 def test_every_scenario_builds_and_says_what_it_cannot_see(name):
     item = get(name)
-    operations = item.operations(Target())
+    operations = item.operations(_target_for(name))
 
     assert operations, "a scenario without operations measures nothing"
     # The two sentences are the point of the tool, not decoration.
     assert len(item.reveals) > 40
     assert len(item.blind_to) > 40
+
+
+def test_a_report_scenario_without_a_report_says_what_to_pass():
+    with pytest.raises(SystemExit, match="--report"):
+        get("report").operations(Target())
+
+
+def test_a_report_scenario_without_records_says_so():
+    with pytest.raises(SystemExit, match="no records"):
+        get("report").operations(Target(report_name="sale.report_saleorder"))
 
 
 def test_an_unknown_scenario_names_the_ones_that_exist():

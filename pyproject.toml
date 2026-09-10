@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "locutus"
+version = "0.1.0"
+description = "Measure an Odoo the way its own web client uses it."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "hav.media", email = "hallo@hav.media" }]
+keywords = ["odoo", "benchmark", "load-testing", "postgresql", "performance"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Benchmark",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/havmedia/locutus"
+Source = "https://github.com/havmedia/locutus"
+
+[project.scripts]
+locutus = "locutus.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

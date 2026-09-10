@@ -1,0 +1,93 @@
+import time
+
+from fake_odoo import FakeOdoo
+from locutus import scenario as scenarios
+from locutus.rpc import Session
+from locutus.runner import Pacer, RunConfig, run
+from locutus.workload import Target
+
+
+def _factory(odoo, password="secret"):
+    return lambda: Session(odoo.url, "demo", "admin", password, timeout=5)
+
+
+def _config(**overrides):
+    base = dict(concurrency=2, warmup_seconds=0, duration_seconds=1, runs=2, seed=7, timeout=5)
+    base.update(overrides)
+    return RunConfig(**base)
+
+
+def test_a_run_serves_requests_and_keeps_the_runs_apart():
+    with FakeOdoo() as odoo:
+        aggregate = run(scenarios.get("browse"), Target(), _factory(odoo), _config())
+
+    assert len(aggregate.runs) == 2
+    assert aggregate.requests > 0
+    assert aggregate.errors == 0
+
+
+def test_failed_requests_are_counted_and_not_timed():
+    with FakeOdoo(fail_every=2) as odoo:
+        aggregate = run(scenarios.get("browse"), Target(), _factory(odoo), _config())
+
+    assert aggregate.errors > 0
+    # A failed request must never land in the latency sample: a configuration
+    # that drops half the load would otherwise look fast.
+    assert aggregate.requests + aggregate.errors > aggregate.requests
+
+
+def test_a_login_that_fails_does_not_hang_the_run():
+    with FakeOdoo() as odoo:
+        aggregate = run(
+            scenarios.get("browse"), Target(), _factory(odoo, password="wrong"), _config()
+        )
+
+    assert aggregate.requests == 0
+    assert aggregate.errors == 2 * 2  # one per user per run
+
+
+def test_the_office_day_mix_files_both_kinds_of_request():
+    with FakeOdoo() as odoo:
+        aggregate = run(
+            scenarios.get("office-day"), Target(), _factory(odoo), _config(duration_seconds=2)
+        )
+
+    buckets = aggregate.bucket_requests()
+    assert "list" in buckets
+    assert any(name.startswith("filter_") for name in buckets)
+
+
+def test_the_same_seed_draws_the_same_sequence_on_both_sides():
+    # Each worker seeds its own generator, so one worker replays exactly. With
+    # several workers the parameters are still the same set; only the order in
+    # which they arrive at the server is up to the scheduler.
+    def offsets():
+        with FakeOdoo() as odoo:
+            run(scenarios.get("search"), Target(), _factory(odoo), _config(runs=1, concurrency=1))
+            return [call["kwargs"]["offset"] for call in odoo.call_kw_payloads()]
+
+    first, second = offsets(), offsets()
+    shortest = min(len(first), len(second))
+
+    assert shortest > 0
+    assert first[:shortest] == second[:shortest]
+
+
+def test_the_pacer_holds_a_rate_across_workers():
+    pacer = Pacer(rate=50.0)
+    started = time.monotonic()
+    for _ in range(10):
+        pacer.wait()
+    elapsed = time.monotonic() - started
+
+    # Ten slots at fifty a second is about 0.2 s. Generous bounds: the point is
+    # that it waits at all and does not wait a multiple of what it should.
+    assert 0.1 < elapsed < 0.5
+
+
+def test_no_rate_means_no_waiting():
+    pacer = Pacer(rate=0.0)
+    started = time.monotonic()
+    for _ in range(1000):
+        pacer.wait()
+    assert time.monotonic() - started < 0.1

@@ -1,0 +1,128 @@
+# Locutus
+
+Measure an Odoo the way its own web client uses it.
+
+Locutus logs in as a real user, then sends the calls a browser sends when someone
+opens a list, pages through it, filters it or groups it. It reports how many of
+those a server gets through, how long they took, and whether a change you made
+actually moved anything. Every scenario also states what it *cannot* see, because
+that is where most Odoo benchmarks go wrong.
+
+No dependencies. Python 3.9 and up. It runs on the server you are measuring.
+
+## Why this exists
+
+We spent a week benchmarking a 16-core Odoo with 84.5 million records and got a
+clear result: tuning PostgreSQL changed nothing. Repeated runs, alternating,
+carefully measured. Nothing.
+
+The result was real and the conclusion was wrong. Our load generator sorted by a
+column with no index. That leaves the database exactly one possible plan, so no
+setting it has can change the outcome. It was a benchmark of the benchmark.
+
+Changing one thing, sorting by the model's own default order the way the web
+client does, produced this on the same machine, same data, same hour:
+
+| | requests/s | slowest 5% |
+| --- | --- | --- |
+| Nothing tuned | 59.9 | 0.95 s |
+| Odoo tuned | 158.5 | 0.22 s |
+| Database tuned as well | 508.2 | 0.13 s |
+
+Locutus is the benchmark we wish we had started with, plus the habits we needed
+to trust its numbers.
+
+## Install
+
+```
+pip install git+https://github.com/havmedia/locutus
+```
+
+Or copy the `src/locutus` directory onto the server and run `python3 -m locutus`.
+There is nothing to install for it.
+
+## Use
+
+```
+locutus scenarios
+
+locutus run --url http://10.0.0.5:8069 --db production --login admin \
+            --scenario office-day --users 50 --out before.json
+
+# change one thing, and only one thing
+
+locutus run --url http://10.0.0.5:8069 --db production --login admin \
+            --scenario office-day --users 50 --out after.json
+
+locutus compare before.json after.json
+```
+
+The password comes from `--password` or the `LOCUTUS_PASSWORD` environment
+variable. Point it at a copy of production, not at production.
+
+`locutus run` first asks the instance for the date range its records actually
+cover, so the filters it generates hit real data instead of an empty window.
+
+## Scenarios
+
+| Scenario | What it does | What a difference means |
+| --- | --- | --- |
+| `browse` | Opens lists and pages through them | How many requests Odoo's Python can serve at once. Moves with worker count and memory limits. Blind to database settings. |
+| `search` | Filters a list by a date range, keeps the model's order | Whether the database walks the index or reads the table. Orders of magnitude on a large table. |
+| `office-day` | 99 list views for every filtered search | Both bottlenecks, in the order they appear. The realistic one. |
+| `month-end` | Groups a month of records | Whether an aggregation fits in the memory the database may use for one. |
+| `flat` | Sorts by a column with no index | Nothing, deliberately. The control: if this moves between two configurations, something other than the database changed. |
+
+## The rules it follows
+
+These are not style choices. Each one is a mistake we made first.
+
+1. **Warm up, then throw the warm-up away.** The first requests of any run pay
+   for caches every later request finds filled.
+2. **Repeat the same configuration and keep the runs apart.** The report prints
+   every run, not just their median.
+3. **Overlapping runs mean no result.** If the runs of configuration A overlap
+   the runs of configuration B, `locutus compare` says so instead of reporting a
+   percentage. We once had a 3% "win" that turned into a 2% loss on the next
+   repeat.
+4. **Failed requests are not fast requests.** Errors are counted separately and
+   never enter the latency sample. A configuration that drops a third of the
+   load is not the winner.
+5. **The same seed on both sides.** Each worker seeds its own generator, so both
+   sides of a comparison draw the same parameters.
+6. **Compare latency at equal load.** `--rate` caps the arrival rate. Comparing
+   per-request latency between a run that served 60 requests a second and one
+   that served 500 compares a quiet machine with a busy one, and the busy one
+   will look worse at exactly the things you improved.
+7. **Break the numbers down by parameter.** A workload that mixes cheap and
+   expensive filters hides the expensive ones in its median. The report lists
+   each bucket separately.
+8. **Say what the measurement cannot see.** Printed with every result.
+
+## Traps this tool was built out of
+
+- **Sorting by an unindexed column.** One possible plan, so database settings
+  cannot matter and a benchmark built on it will say they never do.
+- **Deep `OFFSET` as a stand-in for hard work.** It measures scan-and-discard,
+  which is real but is not what your users do.
+- **Measuring A, then B, on a cold cache.** The second one inherits a warm cache
+  and wins for the wrong reason. Alternate.
+- **Reading a per-request latency across runs with different throughput.** See
+  rule 6.
+- **Trusting a bucket with twenty samples.** Widen the run or narrow the
+  workload; the report prints the count next to every bucket so you can see when
+  a number rests on nothing.
+
+## What it does not do
+
+- It does not write. Nothing here inserts, updates or deletes, so vacuum,
+  checkpoint and WAL settings are untouched by it.
+- It does not render. This is the server's work, not the browser's.
+- It does not tune anything. It measures; what you change is your decision.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
+
+Built at [hav.media](https://hav.media) while working out why our Odoo hosting
+was slower than it needed to be.

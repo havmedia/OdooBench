@@ -1,7 +1,7 @@
 import pytest
 
 from fake_odoo import FakeOdoo
-from locutus.rpc import RpcError, Session
+from odoobench.rpc import RpcError, Session
 
 
 def test_authenticates_and_keeps_the_session():

@@ -1,4 +1,4 @@
-from locutus.compare import bucket_lines, compare
+from odoobench.compare import bucket_lines, compare
 
 
 def _result(label, rps_values, buckets=None):

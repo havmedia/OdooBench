@@ -1,4 +1,4 @@
-"""Locutus: measure an Odoo the way its own web client uses it."""
+"""OdooBench: measure an Odoo the way its own web client uses it."""
 
 __version__ = "0.1.0"
 

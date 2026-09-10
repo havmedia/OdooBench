@@ -1,4 +1,4 @@
-from locutus.stats import Aggregate, Range, RunSummary, percentile
+from odoobench.stats import Aggregate, Range, RunSummary, percentile
 
 
 def test_percentile_of_an_empty_sample_is_zero_not_a_crash():

@@ -1,6 +1,6 @@
 """A stand-in Odoo that speaks just enough JSON-RPC to be measured.
 
-It records every payload it receives, which is how the tests check that Locutus
+It records every payload it receives, which is how the tests check that OdooBench
 sends what the real web client sends rather than something of its own invention.
 """
 

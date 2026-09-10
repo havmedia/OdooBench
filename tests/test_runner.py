@@ -1,10 +1,10 @@
 import time
 
 from fake_odoo import FakeOdoo
-from locutus import scenario as scenarios
-from locutus.rpc import Session
-from locutus.runner import Pacer, RunConfig, run
-from locutus.workload import Target
+from odoobench import scenario as scenarios
+from odoobench.rpc import Session
+from odoobench.runner import Pacer, RunConfig, run
+from odoobench.workload import Target
 
 
 def _factory(odoo, password="secret"):

@@ -156,7 +156,7 @@ def command_scenarios(_args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="locutus",
+        prog="odoobench",
         description="Measure an Odoo the way its own web client uses it.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -167,8 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--login", default="admin")
     run_parser.add_argument(
         "--password",
-        default=os.environ.get("LOCUTUS_PASSWORD", ""),
-        help="or set LOCUTUS_PASSWORD",
+        default=os.environ.get("ODOOBENCH_PASSWORD", ""),
+        help="or set ODOOBENCH_PASSWORD",
     )
     run_parser.add_argument("--scenario", default="office-day")
     run_parser.add_argument("--users", type=int, default=8, help="concurrent logged-in users")
@@ -210,5 +210,5 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "command", "") == "run" and not args.password:
-        parser.error("a password is required: --password or LOCUTUS_PASSWORD")
+        parser.error("a password is required: --password or ODOOBENCH_PASSWORD")
     return int(args.func(args))

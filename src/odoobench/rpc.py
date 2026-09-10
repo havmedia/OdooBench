@@ -1,7 +1,7 @@
 """The calls Odoo's own web client makes, and nothing else.
 
 A benchmark that talks to Odoo through some side door measures the side door.
-Locutus authenticates the way a browser does, keeps the session cookie, and then
+OdooBench authenticates the way a browser does, keeps the session cookie, and then
 sends `call_kw` payloads that are byte-for-byte the shape the web client sends
 for a list view. Standard library only, so this runs on a server where nothing
 may be installed.

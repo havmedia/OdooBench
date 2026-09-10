@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "locutus"
+name = "odoobench"
 version = "0.1.0"
 description = "Measure an Odoo the way its own web client uses it."
 readme = "README.md"
@@ -21,11 +21,11 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/havmedia/locutus"
-Source = "https://github.com/havmedia/locutus"
+Homepage = "https://github.com/havmedia/odoobench"
+Source = "https://github.com/havmedia/odoobench"
 
 [project.scripts]
-locutus = "locutus.cli:main"
+odoobench = "odoobench.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]

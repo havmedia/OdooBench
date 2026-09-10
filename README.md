@@ -1,8 +1,8 @@
-# Locutus
+# OdooBench
 
 Measure an Odoo the way its own web client uses it.
 
-Locutus logs in as a real user, then sends the calls a browser sends when someone
+OdooBench logs in as a real user, then sends the calls a browser sends when someone
 opens a list, pages through it, filters it or groups it. It reports how many of
 those a server gets through, how long they took, and whether a change you made
 actually moved anything. Every scenario also states what it *cannot* see, because
@@ -29,39 +29,81 @@ client does, produced this on the same machine, same data, same hour:
 | Odoo tuned | 158.5 | 0.22 s |
 | Database tuned as well | 508.2 | 0.13 s |
 
-Locutus is the benchmark we wish we had started with, plus the habits we needed
+OdooBench is the benchmark we wish we had started with, plus the habits we needed
 to trust its numbers.
 
 ## Install
 
 ```
-pip install git+https://github.com/havmedia/locutus
+pip install git+https://github.com/havmedia/odoobench
 ```
 
-Or copy the `src/locutus` directory onto the server and run `python3 -m locutus`.
+Or copy the `src/odoobench` directory onto the server and run `python3 -m odoobench`.
 There is nothing to install for it.
 
 ## Use
 
 ```
-locutus scenarios
+odoobench scenarios
 
-locutus run --url http://10.0.0.5:8069 --db production --login admin \
+odoobench run --url http://10.0.0.5:8069 --db production --login admin \
             --scenario office-day --users 50 --out before.json
 
 # change one thing, and only one thing
 
-locutus run --url http://10.0.0.5:8069 --db production --login admin \
+odoobench run --url http://10.0.0.5:8069 --db production --login admin \
             --scenario office-day --users 50 --out after.json
 
-locutus compare before.json after.json
+odoobench compare before.json after.json
 ```
 
-The password comes from `--password` or the `LOCUTUS_PASSWORD` environment
+The password comes from `--password` or the `ODOOBENCH_PASSWORD` environment
 variable. Point it at a copy of production, not at production.
 
-`locutus run` first asks the instance for the date range its records actually
+`odoobench run` first asks the instance for the date range its records actually
 cover, so the filters it generates hit real data instead of an empty window.
+
+## Getting enough data to measure on
+
+A benchmark on an empty Odoo measures an empty Odoo. Every effect this tool can
+show needs a table large enough that the database has to make a decision about
+how to read it.
+
+The best data is a restored copy of your production database. Failing that, Odoo
+ships a generator:
+
+```
+odoo populate -d yourdb --models res.partner --factors 9
+```
+
+A factor of nine copies the model nine times, so it ends at ten times its
+original size. Run it again to grow further. It needs a database user allowed to
+create records, it holds a long transaction, and it is not quick: our 84.5
+million partners came to 36 GB on disk.
+
+**Generated rows are more regular than real ones**, and it changes what you
+measure. In our set, records created close in time also sorted close together by
+name. A date filter therefore found its matches in a dense stretch of the name
+index instead of scattered through it, so the database walked far less of the
+index than it would on real data. That distance is exactly what the `search`
+scenario times.
+
+Two consequences, both worth taking seriously:
+
+- Compare configurations against each other **on the same data**. That is what
+  this tool is for, and it stays valid.
+- Do not compare your absolute numbers to ours, or to anybody else's. A second
+  per page here and a second per page there are not the same second.
+
+### Seeding data and seeding randomness
+
+Two different things share the word. `odoo populate` seeds the *database*, once,
+before you measure anything. The `--seed` flag seeds the *random generator* that
+picks which page and which filter each simulated user asks for, on every run. It
+defaults to a fixed value on purpose: both sides of a comparison then draw the
+same parameters, and a difference between them cannot come from one side having
+drawn easier work. Change it only when you want a different, equally repeatable
+sequence.
 
 ## Scenarios
 
@@ -82,7 +124,7 @@ These are not style choices. Each one is a mistake we made first.
 2. **Repeat the same configuration and keep the runs apart.** The report prints
    every run, not just their median.
 3. **Overlapping runs mean no result.** If the runs of configuration A overlap
-   the runs of configuration B, `locutus compare` says so instead of reporting a
+   the runs of configuration B, `odoobench compare` says so instead of reporting a
    percentage. We once had a 3% "win" that turned into a 2% loss on the next
    repeat.
 4. **Failed requests are not fast requests.** Errors are counted separately and

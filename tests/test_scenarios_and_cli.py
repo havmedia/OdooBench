@@ -3,12 +3,12 @@ import json
 import pytest
 
 from fake_odoo import FakeOdoo
-from locutus import report
-from locutus.cli import build_parser, main
-from locutus.rpc import Session
-from locutus.scenario import SCENARIOS, get
-from locutus.stats import Aggregate, RunSummary
-from locutus.workload import Target, probe
+from odoobench import report
+from odoobench.cli import build_parser, main
+from odoobench.rpc import Session
+from odoobench.scenario import SCENARIOS, get
+from odoobench.stats import Aggregate, RunSummary
+from odoobench.workload import Target, probe
 
 
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
@@ -116,6 +116,6 @@ def test_compare_prints_the_overlap_warning(tmp_path, capsys):
 
 
 def test_the_password_may_come_from_the_environment(monkeypatch):
-    monkeypatch.setenv("LOCUTUS_PASSWORD", "from-env")
+    monkeypatch.setenv("ODOOBENCH_PASSWORD", "from-env")
     args = build_parser().parse_args(["run", "--url", "http://x", "--db", "d"])
     assert args.password == "from-env"

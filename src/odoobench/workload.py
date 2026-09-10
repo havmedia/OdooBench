@@ -13,10 +13,14 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable, List, Optional
 
-from .rpc import Session
+from .rpc import RpcError, Session
 
 #: What Odoo's list view asks for. Eighty rows is the web client's page size.
 PAGE_SIZE = 80
+
+#: How many groups a pivot brings back. The database still aggregates
+#: everything; this only stops the result itself from becoming the bottleneck.
+GROUP_LIMIT = 500
 
 
 @dataclass
@@ -37,12 +41,20 @@ class Target:
     last_date: date = date(2026, 1, 1)
     unsorted_field: str = "email"
 
-    #: Set by `--report`. Which document to render, on how many records at once,
-    #: and the pool of record ids to draw from.
-    report_name: str = ""
-    report_model: str = ""
-    report_ids: List[int] = field(default_factory=list)
-    report_batch: int = 1
+    #: Set by `--document`. Which document to print, on how many records at
+    #: once, and the pool of record ids to draw from.
+    document_name: str = ""
+    document_model: str = ""
+    document_ids: List[int] = field(default_factory=list)
+    document_batch: int = 1
+
+    #: Set by `--analysis`. Which analysis model to pivot, over how long, by
+    #: what, measuring what. Empty entries are discovered from the model.
+    analysis_model: str = ""
+    analysis_date_field: str = ""
+    analysis_dimension: str = ""
+    analysis_measures: List[str] = field(default_factory=list)
+    analysis_months: int = 12
 
     @property
     def span_days(self) -> int:
@@ -194,17 +206,17 @@ def unsorted_scan(target: Target, days: int = 30) -> Operation:
     return Operation("unsorted_scan", 1, call)
 
 
-def find_report(session: Session, report_name: str) -> dict:
-    """Look the report up the way the interface does, to learn its model."""
+def find_document(session: Session, name: str) -> dict:
+    """Look the printable document up, to learn which model it prints."""
     rows = session.search_read(
         "ir.actions.report",
-        [["report_name", "=", report_name]],
+        [["report_name", "=", name]],
         ["report_name", "model", "report_type", "name"],
         limit=1,
         order="id asc",
     )
     if not rows:
-        raise LookupError("no report named %r on this instance" % report_name)
+        raise LookupError("no printable document named %r on this instance" % name)
     return rows[0]
 
 
@@ -213,7 +225,7 @@ def sample_ids(session: Session, model: str, limit: int = 200) -> List[int]:
     return [int(row["id"]) for row in rows]
 
 
-def render_report(target: Target, converter: str) -> Operation:
+def print_document(target: Target, converter: str) -> Operation:
     """Render a document, the way the print button does.
 
     Two converters, and the difference between them is the point. `html` runs
@@ -223,23 +235,154 @@ def render_report(target: Target, converter: str) -> Operation:
     Odoo and how much is the PDF engine, which are fixed in completely different
     places.
     """
-    if not target.report_name:
-        raise SystemExit("this scenario needs --report, for example --report account.report_invoice")
-    if not target.report_ids:
-        raise SystemExit("no records found for report %r" % target.report_name)
+    if not target.document_name:
+        raise SystemExit(
+            "this scenario needs --document, for example --document account.report_invoice"
+        )
+    if not target.document_ids:
+        raise SystemExit("no records found for document %r" % target.document_name)
 
-    batch = max(1, target.report_batch)
+    batch = max(1, target.document_batch)
 
     def call(session: Session, rng: random.Random) -> Optional[str]:
-        pool = target.report_ids
+        pool = target.document_ids
         chosen = rng.sample(pool, batch) if len(pool) >= batch else list(pool)
         session.fetch(
             "/report/%s/%s/%s"
-            % (converter, target.report_name, ",".join(str(value) for value in chosen))
+            % (converter, target.document_name, ",".join(str(value) for value in chosen))
         )
         return "%s_x%d" % (converter, batch)
 
     return Operation("render_%s" % converter, 1, call)
+
+
+#: Fields no pivot is ever grouped by, however tempting their type.
+_NEVER_GROUP = {
+    "create_uid", "write_uid", "id", "message_main_attachment_id", "currency_id",
+}
+
+#: Field names that make a good measure, best first.
+_MEASURE_HINTS = ("price_total", "price_subtotal", "amount_total", "amount_untaxed",
+                  "product_uom_qty", "product_qty", "qty_delivered", "quantity", "nbr")
+
+
+def _has_values(session: Session, model: str, name: str) -> bool:
+    """Does this field hold anything at all?
+
+    Asked because a field that is null everywhere makes a report that returns
+    nothing and returns it very quickly. A benchmark that picks one measures an
+    empty result set and calls the server fast.
+    """
+    try:
+        return bool(session.search_read(model, [[name, "!=", False]], ["id"], limit=1, order=""))
+    except RpcError:
+        return False
+
+
+def inspect_analysis(session: Session, model: str) -> dict:
+    """Work out a realistic pivot for a model by reading its fields and its data.
+
+    Odoo's analysis models (`sale.report`, `account.invoice.report` and their
+    kin) are read-only SQL views built for exactly this: group by a period and a
+    dimension, sum a measure. Rather than make the operator spell that out, ask
+    the model what it has, then check that what it has is filled in.
+    """
+    described = session.call_kw(model, "fields_get", [[], ["type", "string", "store"]])
+
+    def stored(name: str) -> bool:
+        return bool(described[name].get("store", True))
+
+    dates = [
+        name for name, spec in described.items()
+        if spec.get("type") in ("date", "datetime") and stored(name)
+        and name not in ("create_date", "write_date")
+    ]
+    dates.sort(key=lambda name: (0 if name in ("date", "date_order", "invoice_date") else 1, name))
+    # The bookkeeping date is a poor choice on a model built for reporting and
+    # the only choice on a model that is not. It goes last, never missing.
+    if "create_date" in described:
+        dates.append("create_date")
+
+    dimensions = [
+        name for name, spec in described.items()
+        if spec.get("type") == "many2one" and stored(name) and name not in _NEVER_GROUP
+    ]
+    dimensions.sort(key=lambda name: (0 if "partner" in name else 1, name))
+
+    measures = [name for name in _MEASURE_HINTS if name in described]
+    if not measures:
+        measures = [
+            name for name, spec in described.items()
+            if spec.get("type") in ("float", "monetary", "integer") and stored(name)
+            and name not in _NEVER_GROUP
+        ][:1]
+
+    return {
+        "date_field": _first_filled(session, model, dates),
+        "dimension": _first_filled(session, model, dimensions),
+        "measures": measures[:2],
+    }
+
+
+def _first_filled(session: Session, model: str, candidates: List[str]) -> str:
+    for name in candidates[:6]:
+        if _has_values(session, model, name):
+            return name
+    return candidates[0] if candidates else ""
+
+
+def _analysis_domain(target: Target) -> List[list]:
+    if not target.analysis_date_field or not target.analysis_months:
+        return []
+    days = int(target.analysis_months * 30.4)
+    start_at = target.last_date - timedelta(days=days)
+    return [[target.analysis_date_field, ">=", start_at.isoformat()]]
+
+
+def pivot(target: Target) -> Operation:
+    """Two dimensions at once, the way a pivot table is opened.
+
+    This is the query an analysis model exists for, and the one that can need
+    more memory than the database is allowed to give a single query. It groups a
+    period against a dimension and sums a measure, over however many rows the
+    period covers.
+    """
+
+    def call(session: Session, rng: random.Random) -> Optional[str]:
+        groupby = ["%s:month" % target.analysis_date_field]
+        if target.analysis_dimension:
+            groupby.append(target.analysis_dimension)
+        session.call_kw(
+            target.analysis_model,
+            "read_group",
+            [_analysis_domain(target), list(target.analysis_measures), groupby],
+            # A pivot view shows a bounded number of rows. Without the limit a
+            # dimension with millions of values would drag all of them over the
+            # wire, and the measurement would become one of the network.
+            {"lazy": False, "limit": GROUP_LIMIT, "context": {}},
+        )
+        return "pivot"
+
+    return Operation("pivot", 1, call)
+
+
+def trend(target: Target) -> Operation:
+    """One dimension, the way a graph view is opened. The cheaper sibling."""
+
+    def call(session: Session, rng: random.Random) -> Optional[str]:
+        session.call_kw(
+            target.analysis_model,
+            "read_group",
+            [
+                _analysis_domain(target),
+                list(target.analysis_measures),
+                ["%s:month" % target.analysis_date_field],
+            ],
+            {"lazy": True, "limit": GROUP_LIMIT, "context": {}},
+        )
+        return "trend"
+
+    return Operation("trend", 1, call)
 
 
 def weighted(operations: List[Operation]) -> List[Operation]:

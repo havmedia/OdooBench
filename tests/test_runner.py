@@ -95,8 +95,8 @@ def test_no_rate_means_no_waiting():
 
 def test_a_report_is_fetched_from_the_route_the_print_button_uses():
     with FakeOdoo() as odoo:
-        target = Target(report_name="sale.report_saleorder", report_ids=[11, 12, 13, 14])
-        run(scenarios.get("report"), target, _factory(odoo), _config(runs=1))
+        target = Target(document_name="sale.report_saleorder", document_ids=[11, 12, 13, 14])
+        run(scenarios.get("document"), target, _factory(odoo), _config(runs=1))
 
     paths = odoo.report_paths()
     assert paths, "no document was ever requested"
@@ -109,9 +109,9 @@ def test_a_report_is_fetched_from_the_route_the_print_button_uses():
 def test_a_batch_prints_several_records_in_one_request():
     with FakeOdoo() as odoo:
         target = Target(
-            report_name="sale.report_saleorder", report_ids=list(range(1, 40)), report_batch=5
+            document_name="sale.report_saleorder", document_ids=list(range(1, 40)), document_batch=5
         )
-        run(scenarios.get("report-pdf"), target, _factory(odoo), _config(runs=1))
+        run(scenarios.get("document-batch"), target, _factory(odoo), _config(runs=1))
 
     last = odoo.report_paths()[-1].rsplit("/", 1)[-1]
     assert len(last.split(",")) == 5
@@ -119,8 +119,52 @@ def test_a_batch_prints_several_records_in_one_request():
 
 def test_an_empty_document_counts_as_an_error():
     with FakeOdoo(document=b"") as odoo:
-        target = Target(report_name="sale.report_saleorder", report_ids=[1, 2, 3])
-        aggregate = run(scenarios.get("report-pdf"), target, _factory(odoo), _config(runs=1))
+        target = Target(document_name="sale.report_saleorder", document_ids=[1, 2, 3])
+        aggregate = run(scenarios.get("document-batch"), target, _factory(odoo), _config(runs=1))
 
     assert aggregate.requests == 0
     assert aggregate.errors > 0
+
+
+def test_the_pivot_asks_for_a_period_against_a_dimension():
+    with FakeOdoo() as odoo:
+        target = Target(
+            analysis_model="sale.report",
+            analysis_date_field="date",
+            analysis_dimension="team_id",
+            analysis_measures=["price_total"],
+        )
+        run(scenarios.get("analysis"), target, _factory(odoo), _config(runs=1))
+
+    grouped = [c for c in odoo.call_kw_payloads() if c["method"] == "read_group"]
+    assert grouped, "no aggregation was ever asked for"
+
+    pivots = [c for c in grouped if len(c["args"][2]) == 2]
+    trends = [c for c in grouped if len(c["args"][2]) == 1]
+    assert pivots and trends
+
+    # A pivot wants the full cross product, which is what lazy=False means, and
+    # it groups the period by month the way the view does.
+    assert pivots[0]["args"][2] == ["date:month", "team_id"]
+    assert pivots[0]["args"][1] == ["price_total"]
+    assert pivots[0]["kwargs"]["lazy"] is False
+    assert trends[0]["kwargs"]["lazy"] is True
+
+
+def test_the_period_is_limited_to_the_months_asked_for():
+    import datetime
+
+    with FakeOdoo() as odoo:
+        target = Target(
+            analysis_model="sale.report",
+            analysis_date_field="date",
+            analysis_measures=[],
+            analysis_months=6,
+            last_date=datetime.date(2026, 1, 1),
+        )
+        run(scenarios.get("analysis"), target, _factory(odoo), _config(runs=1))
+
+    domain = [c for c in odoo.call_kw_payloads() if c["method"] == "read_group"][0]["args"][0]
+    assert domain[0][0] == "date"
+    assert domain[0][1] == ">="
+    assert domain[0][2].startswith("2025-07")

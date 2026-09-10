@@ -64,8 +64,10 @@ def command_run(args: argparse.Namespace) -> int:
         except RpcError as exc:
             print("  probe failed (%s), keeping the given range" % exc, file=sys.stderr)
 
-    if args.scenario.startswith("report"):
-        target = _prepare_report(probe_session, target, args)
+    if args.scenario.startswith("document"):
+        target = _prepare_document(probe_session, target, args)
+    if args.scenario == "analysis":
+        target = _prepare_analysis(probe_session, target, args)
 
     config = RunConfig(
         concurrency=args.users,
@@ -113,42 +115,114 @@ def command_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _prepare_report(session: Session, target: Target, args: argparse.Namespace) -> Target:
+def _prepare_document(session: Session, target: Target, args: argparse.Namespace) -> Target:
     """Find the report, its model and enough records to draw from."""
-    if not args.report:
+    if not args.document:
         raise SystemExit(
-            "the %s scenario needs --report. Run `odoobench reports` to see what "
-            "this instance has." % args.scenario
+            "the %s scenario needs --document. Run `odoobench documents` to see "
+            "what this instance can print." % args.scenario
         )
     try:
-        found = workload.find_report(session, args.report)
+        found = workload.find_document(session, args.document)
     except (LookupError, RpcError) as exc:
         raise SystemExit(str(exc))
 
     model = found.get("model") or ""
     if not model:
-        raise SystemExit("report %r has no model to print" % args.report)
+        raise SystemExit("document %r has no model to print" % args.document)
 
-    ids = workload.sample_ids(session, model, limit=args.report_sample)
+    ids = workload.sample_ids(session, model, limit=args.document_sample)
     if not ids:
         raise SystemExit(
-            "report %r prints %s, and this instance has no %s records"
-            % (args.report, model, model)
+            "document %r prints %s, and this instance has no %s records"
+            % (args.document, model, model)
         )
 
     print(
-        "  report %s prints %s, drawing from %d records"
-        % (args.report, model, len(ids)),
+        "  document %s prints %s, drawing from %d records"
+        % (args.document, model, len(ids)),
         file=sys.stderr,
     )
-    target.report_name = args.report
-    target.report_model = model
-    target.report_ids = ids
-    target.report_batch = args.report_batch
+    target.document_name = args.document
+    target.document_model = model
+    target.document_ids = ids
+    target.document_batch = args.document_batch
     return target
 
 
-def command_reports(args: argparse.Namespace) -> int:
+def _prepare_analysis(session: Session, target: Target, args: argparse.Namespace) -> Target:
+    """Ask the analysis model what it can be grouped by, unless told."""
+    if not args.analysis:
+        raise SystemExit(
+            "the analysis scenario needs --analysis, for example --analysis sale.report. "
+            "Run `odoobench analyses` to see what this instance has."
+        )
+    try:
+        found = workload.inspect_analysis(session, args.analysis)
+    except RpcError as exc:
+        raise SystemExit("cannot read the fields of %r: %s" % (args.analysis, exc))
+
+    target.analysis_model = args.analysis
+    target.analysis_date_field = args.group_period or found["date_field"]
+    target.analysis_dimension = (
+        "" if args.group_by == "none" else (args.group_by or found["dimension"])
+    )
+    target.analysis_measures = (
+        [name.strip() for name in args.measure.split(",") if name.strip()]
+        if args.measure
+        else found["measures"]
+    )
+    target.analysis_months = args.months
+
+    print(
+        "  %s grouped by %s%s over %d months, measuring %s"
+        % (
+            target.analysis_model,
+            target.analysis_date_field + ":month",
+            " and " + target.analysis_dimension if target.analysis_dimension else "",
+            target.analysis_months,
+            ", ".join(target.analysis_measures) or "record count",
+        ),
+        file=sys.stderr,
+    )
+    return target
+
+
+def command_analyses(args: argparse.Namespace) -> int:
+    """List the analysis models this instance has, and whether they hold data."""
+    session = _session_factory(args)()
+    try:
+        session.authenticate()
+    except RpcError as exc:
+        print("could not log in: %s" % exc, file=sys.stderr)
+        return 2
+
+    rows = session.search_read(
+        "ir.model",
+        [["model", "like", "%report%"], ["transient", "=", False]],
+        ["model", "name"],
+        limit=args.limit,
+        order="model asc",
+    )
+
+    print("%-42s %-30s %s" % ("model", "name", "has data"))
+    print("-" * 86)
+    for row in rows:
+        model = row["model"]
+        # A limit-one read answers "is there anything here" without counting
+        # millions of rows, which on a SQL view is not a cheap question.
+        try:
+            sample = session.search_read(model, [], ["id"], limit=1, order="")
+            state = "yes" if sample else "no"
+        except RpcError:
+            state = "-"
+        print("%-42s %-30s %s" % (model, (row.get("name") or "")[:30], state))
+    print("")
+    print("Pick one with data and pass it as --analysis. Any model works, not just these.")
+    return 0
+
+
+def command_documents(args: argparse.Namespace) -> int:
     """List what this instance can print, and whether it has anything to print."""
     session = _session_factory(args)()
     try:
@@ -184,7 +258,7 @@ def command_reports(args: argparse.Namespace) -> int:
             % (row["report_name"], model, "?" if total < 0 else total)
         )
     print("")
-    print("Pick one with records and pass it as --report.")
+    print("Pick one with records and pass it as --document.")
     return 0
 
 
@@ -269,18 +343,39 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--last-date", dest="last_date", default="")
     run_parser.add_argument("--no-probe", action="store_true", help="skip reading the date range")
     run_parser.add_argument(
-        "--report", default="", help="report_name to print, e.g. account.report_invoice"
+        "--document", default="", help="printable document, e.g. account.report_invoice"
     )
     run_parser.add_argument(
-        "--report-batch",
-        dest="report_batch",
+        "--document-batch",
+        dest="document_batch",
         type=int,
         default=1,
         help="records per printed document; raise it for a month-end print run",
     )
     run_parser.add_argument(
-        "--report-sample",
-        dest="report_sample",
+        "--analysis", default="", help="analysis model to pivot, e.g. sale.report"
+    )
+    run_parser.add_argument(
+        "--group-by",
+        dest="group_by",
+        default="",
+        help="dimension to group by, or 'none'; discovered from the model if unset",
+    )
+    run_parser.add_argument(
+        "--group-period",
+        dest="group_period",
+        default="",
+        help="date field to group by month; discovered from the model if unset",
+    )
+    run_parser.add_argument(
+        "--measure", default="", help="comma separated measures; discovered if unset"
+    )
+    run_parser.add_argument(
+        "--months", type=int, default=12, help="how far back the report reaches"
+    )
+    run_parser.add_argument(
+        "--document-sample",
+        dest="document_sample",
         type=int,
         default=200,
         help="how many record ids to draw from",
@@ -298,16 +393,27 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = sub.add_parser("scenarios", help="what can be measured, and what it shows")
     list_parser.set_defaults(func=command_scenarios)
 
-    reports_parser = sub.add_parser("reports", help="what this instance can print")
-    reports_parser.add_argument("--url", required=True)
-    reports_parser.add_argument("--db", required=True)
-    reports_parser.add_argument("--login", default="admin")
-    reports_parser.add_argument(
+    documents_parser = sub.add_parser("documents", help="what this instance can print")
+    documents_parser.add_argument("--url", required=True)
+    documents_parser.add_argument("--db", required=True)
+    documents_parser.add_argument("--login", default="admin")
+    documents_parser.add_argument(
         "--password", default=os.environ.get("ODOOBENCH_PASSWORD", "")
     )
-    reports_parser.add_argument("--timeout", type=int, default=60)
-    reports_parser.add_argument("--limit", type=int, default=60)
-    reports_parser.set_defaults(func=command_reports)
+    documents_parser.add_argument("--timeout", type=int, default=60)
+    documents_parser.add_argument("--limit", type=int, default=60)
+    documents_parser.set_defaults(func=command_documents)
+
+    analyses_parser = sub.add_parser("analyses", help="what this instance can report on")
+    analyses_parser.add_argument("--url", required=True)
+    analyses_parser.add_argument("--db", required=True)
+    analyses_parser.add_argument("--login", default="admin")
+    analyses_parser.add_argument(
+        "--password", default=os.environ.get("ODOOBENCH_PASSWORD", "")
+    )
+    analyses_parser.add_argument("--timeout", type=int, default=60)
+    analyses_parser.add_argument("--limit", type=int, default=60)
+    analyses_parser.set_defaults(func=command_analyses)
 
     return parser
 
@@ -315,6 +421,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if getattr(args, "command", "") in {"run", "reports"} and not args.password:
+    if getattr(args, "command", "") in {"run", "documents", "analyses"} and not args.password:
         parser.error("a password is required: --password or ODOOBENCH_PASSWORD")
     return int(args.func(args))

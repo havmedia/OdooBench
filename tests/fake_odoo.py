@@ -49,6 +49,21 @@ class FakeOdoo:
             return {"error": {"message": "server is busy", "code": 500}}
 
         method = params.get("method")
+        if method == "fields_get":
+            return {
+                "result": {
+                    "id": {"type": "integer", "store": True},
+                    "create_date": {"type": "datetime", "store": True},
+                    "date": {"type": "date", "store": True},
+                    "commitment_date": {"type": "datetime", "store": True},
+                    "partner_id": {"type": "many2one", "store": True},
+                    "team_id": {"type": "many2one", "store": True},
+                    "currency_id": {"type": "many2one", "store": True},
+                    "price_total": {"type": "monetary", "store": True},
+                    "margin": {"type": "float", "store": False},
+                    "name": {"type": "char", "store": True},
+                }
+            }
         if params.get("model") == "ir.actions.report" and method == "search_read":
             return {
                 "result": [

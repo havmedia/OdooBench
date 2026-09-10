@@ -113,20 +113,53 @@ sequence.
 | `search` | Filters a list by a date range, keeps the model's order | Whether the database walks the index or reads the table. Orders of magnitude on a large table. |
 | `office-day` | 99 list views for every filtered search | Both bottlenecks, in the order they appear. The realistic one. |
 | `month-end` | Groups a month of records | Whether an aggregation fits in the memory the database may use for one. |
-| `report` | Prints a document twice, as HTML and as PDF | How long a document takes, and how much of it is the PDF engine rather than Odoo. |
-| `report-pdf` | Prints documents as PDF, in batches if asked | What a printing run costs, which is a different question from what one document costs. |
+| `analysis` | Opens a pivot and a graph on an analysis model | What a report costs: whether the aggregation fits in the memory the database allows one query, and how many cores it may use. |
+| `document` | Prints a document twice, as HTML and as PDF | How long a printed document takes, and how much of that is the PDF engine rather than Odoo. |
+| `document-batch` | Prints documents as PDF, in batches if asked | What a printing run costs, which is a different question from what one document costs. |
 | `flat` | Sorts by a column with no index | Nothing, deliberately. The control: if this moves between two configurations, something other than the database changed. |
 
-## Printing documents
+## Reports, which are two different things
 
-Reports are the other half of an Odoo's work, and they behave nothing like list
-views. One report is a single long request that renders a template, runs its
-queries and then hands the result to an external program.
+"Report" means two unrelated things in Odoo, and they break in different places.
+An **analysis** is a pivot or graph on a model like `sale.report`: one enormous
+aggregation, no rendering. A **document** is a printed invoice or quotation: a
+template, its queries, and an external program that turns HTML into a PDF. There
+is a scenario for each.
+
+### Analyses: pivots and graphs
+
+```
+odoobench analyses --url http://10.0.0.5:8069 --db production
+
+odoobench run --url http://10.0.0.5:8069 --db production \
+              --scenario analysis --analysis sale.report --months 12 --users 2
+```
+
+OdooBench reads the model's fields and picks a period, a dimension and a measure
+by itself, then checks that the field it picked is actually filled in. A field
+that is null everywhere makes a report that returns nothing and returns it very
+fast, which is the most flattering wrong number a benchmark can produce. Override
+any of it with `--group-period`, `--group-by` and `--measure`.
+
+This is the query that can need more memory than the database allows one query,
+and the one that uses spare cores. On 85 million records grouped by month and
+country, our own settings against the defaults:
+
+```
+pivot              7782.5 ms ->     6339.9 ms
+trend              3299.2 ms ->     2592.3 ms
+```
+
+Run it at a low concurrency. A server already saturated by list views has no
+spare core left for an aggregation to use, so a busy machine hides the very
+effect you are looking for.
+
+### Documents: printed invoices and quotations
 
 Find out what your instance can print, and whether it has anything to print:
 
 ```
-odoobench reports --url http://10.0.0.5:8069 --db production
+odoobench documents --url http://10.0.0.5:8069 --db production
 ```
 
 ```
@@ -140,12 +173,12 @@ Then measure one:
 
 ```
 odoobench run --url http://10.0.0.5:8069 --db production \
-              --scenario report --report account_followup.report_followup_print_all \
+              --scenario document --document account_followup.report_followup_print_all \
               --users 2 --duration 60
 ```
 
-The `report` scenario prints each document twice, once as HTML and once as PDF,
-and reports the two separately. On the instance above:
+The `document` scenario prints each one twice, once as HTML and once as PDF,
+and files the two separately. On the instance above:
 
 ```
   html_x1             37.9 ms
@@ -157,7 +190,7 @@ Adding worker processes would not have moved that, and neither would touching th
 database. Without the split you would have had a slow report and no idea which
 half to go and fix.
 
-Use `--report-batch 20` to print twenty records into one document, which is the
+Use `--document-batch 20` to print twenty records into one document, which is the
 month-end print run rather than one invoice. Reports are also the request most
 likely to run into a worker's time or memory limit, so errors in this scenario
 are a finding rather than noise.

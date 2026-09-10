@@ -12,9 +12,12 @@ from odoobench.workload import Target, probe
 
 
 def _target_for(name):
-    if name.startswith("report"):
-        return Target(report_name="sale.report_saleorder", report_model="sale.order",
-                      report_ids=[1, 2, 3])
+    if name.startswith("document"):
+        return Target(document_name="sale.report_saleorder", document_model="sale.order",
+                      document_ids=[1, 2, 3])
+    if name == "analysis":
+        return Target(analysis_model="sale.report", analysis_date_field="date",
+                      analysis_dimension="partner_id", analysis_measures=["price_total"])
     return Target()
 
 
@@ -29,14 +32,24 @@ def test_every_scenario_builds_and_says_what_it_cannot_see(name):
     assert len(item.blind_to) > 40
 
 
-def test_a_report_scenario_without_a_report_says_what_to_pass():
-    with pytest.raises(SystemExit, match="--report"):
-        get("report").operations(Target())
+def test_a_document_scenario_without_a_document_says_what_to_pass():
+    with pytest.raises(SystemExit, match="--document"):
+        get("document").operations(Target())
 
 
-def test_a_report_scenario_without_records_says_so():
+def test_a_document_scenario_without_records_says_so():
     with pytest.raises(SystemExit, match="no records"):
-        get("report").operations(Target(report_name="sale.report_saleorder"))
+        get("document").operations(Target(document_name="sale.report_saleorder"))
+
+
+def test_the_analysis_scenario_without_a_model_says_what_to_pass():
+    with pytest.raises(SystemExit, match="--analysis"):
+        get("analysis").operations(Target())
+
+
+def test_the_analysis_scenario_without_a_date_field_says_so():
+    with pytest.raises(SystemExit, match="no date field"):
+        get("analysis").operations(Target(analysis_model="sale.report"))
 
 
 def test_an_unknown_scenario_names_the_ones_that_exist():
@@ -136,3 +149,47 @@ def test_the_password_may_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("ODOOBENCH_PASSWORD", "from-env")
     args = build_parser().parse_args(["run", "--url", "http://x", "--db", "d"])
     assert args.password == "from-env"
+
+
+def test_the_analysis_fields_are_discovered_from_the_model():
+    from odoobench.workload import inspect_analysis
+
+    with FakeOdoo() as odoo:
+        session = Session(odoo.url, "demo", "admin", "secret")
+        session.authenticate()
+        found = inspect_analysis(session, "sale.report")
+
+    # A real date over a bookkeeping one, a dimension worth grouping by, and a
+    # measure somebody would actually sum. Not currency_id, not an unstored field.
+    assert found["date_field"] == "date"
+    assert found["dimension"] in {"partner_id", "team_id"}
+    assert found["measures"] == ["price_total"]
+
+
+def test_a_date_field_that_is_never_filled_is_not_chosen():
+    # The trap this tool exists to avoid, walked into by its own discovery: a
+    # field that is null everywhere makes a report that returns nothing, fast.
+    from odoobench.workload import inspect_analysis
+
+    class Sparse(Session):
+        def __init__(self):
+            super().__init__("http://x", "d", "u", "p")
+            self.asked = []
+
+        def call_kw(self, model, method, args, kwargs=None):
+            return {
+                "followup_next_action_date": {"type": "date", "store": True},
+                "create_date": {"type": "datetime", "store": True},
+                "parent_id": {"type": "many2one", "store": True},
+            }
+
+        def search_read(self, model, domain, fields, limit=80, offset=0, order=""):
+            name = domain[0][0]
+            self.asked.append(name)
+            return [] if name in ("followup_next_action_date", "parent_id") else [{"id": 1}]
+
+    session = Sparse()
+    found = inspect_analysis(session, "res.partner")
+
+    assert "followup_next_action_date" in session.asked
+    assert found["date_field"] == "create_date"

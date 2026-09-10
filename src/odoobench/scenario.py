@@ -51,15 +51,27 @@ def _flat(target: Target) -> List[Operation]:
     return [workload.unsorted_scan(target)]
 
 
-def _report(target: Target) -> List[Operation]:
+def _document(target: Target) -> List[Operation]:
     return [
-        workload.render_report(target, converter="html"),
-        workload.render_report(target, converter="pdf"),
+        workload.print_document(target, converter="html"),
+        workload.print_document(target, converter="pdf"),
     ]
 
 
-def _report_pdf(target: Target) -> List[Operation]:
-    return [workload.render_report(target, converter="pdf")]
+def _document_batch(target: Target) -> List[Operation]:
+    return [workload.print_document(target, converter="pdf")]
+
+
+def _analysis(target: Target) -> List[Operation]:
+    if not target.analysis_model:
+        raise SystemExit(
+            "this scenario needs --analysis, for example --analysis sale.report"
+        )
+    if not target.analysis_date_field:
+        raise SystemExit(
+            "%s has no date field to group a period by" % target.analysis_model
+        )
+    return [workload.pivot(target), workload.trend(target)]
 
 
 SCENARIOS: Dict[str, Scenario] = {
@@ -121,8 +133,27 @@ SCENARIOS: Dict[str, Scenario] = {
         ),
         build=_month_end,
     ),
-    "report": Scenario(
-        name="report",
+    "analysis": Scenario(
+        name="analysis",
+        summary="Open a pivot and a graph on an analysis model, the way a manager does.",
+        reveals=(
+            "What a report costs when nobody is looking at a list. Grouping a "
+            "period against a dimension is the one everyday query that can need "
+            "more memory than the database allows a single query, and the "
+            "difference between an aggregation that fits and one that spills to "
+            "disk is a third of its runtime. It also runs on spare cores, so it "
+            "moves with how many the database may use at once."
+        ),
+        blind_to=(
+            "Everyday latency under load. One manager opening a pivot is not a "
+            "hundred people clicking, and a server saturated by list views has no "
+            "spare core left for this query to use anyway. Run it at a low "
+            "concurrency, alongside a busy office rather than instead of one."
+        ),
+        build=_analysis,
+    ),
+    "document": Scenario(
+        name="document",
         summary="Print a document, once as HTML and once as PDF.",
         reveals=(
             "How long a document takes, and how much of that is Odoo against how "
@@ -137,21 +168,21 @@ SCENARIOS: Dict[str, Scenario] = {
             "once. It is also the request most likely to hit a worker's time and "
             "memory limits, so a failure here is a finding, not noise."
         ),
-        build=_report,
+        build=_document,
     ),
-    "report-pdf": Scenario(
-        name="report-pdf",
-        summary="Print documents as PDF only, in batches if you ask for them.",
+    "document-batch": Scenario(
+        name="document-batch",
+        summary="Print documents as PDF, in batches if you ask for them.",
         reveals=(
-            "What a printing run costs. With --report-batch this is the month-end "
+            "What a printing run costs. With --document-batch this is the month-end "
             "print job rather than one invoice, which is where the PDF engine "
             "stops being an afterthought and starts being the whole request."
         ),
         blind_to=(
-            "Where the time went inside the request. Run the `report` scenario "
+            "Where the time went inside the request. Run the `document` scenario "
             "for that; it splits the template from the PDF engine."
         ),
-        build=_report_pdf,
+        build=_document_batch,
     ),
     "flat": Scenario(
         name="flat",

@@ -104,9 +104,16 @@ result, and `odoobench compare` refuses to endorse a comparison where either
 side had it. On our own test server one smoke run dropped from 461 to 231
 requests a second between two runs for exactly this reason. `--processes 4` spreads
 the users over four Locust processes and lifts the one-core ceiling. It does not
-stop the generator from competing with the server when both share a machine, so
-for numbers you intend to quote, run it on a separate machine close to the
-server.
+stop the generator from competing with the server when both share a machine.
+
+When there is no second machine, cap the demand instead. Users without think
+time fire as fast as the server answers, so fewer users barely help: the
+generator's work follows requests per second, not users. On our test server
+fifty users and twenty users were both CPU-bound at around 380 requests a
+second, while `--rate 120` ran all three configurations without a single
+saturated run. The comparison then asks a different and very usable question:
+given the same demand, how much of it does each configuration answer, and how
+fast.
 
 ## Getting enough data to measure on
 

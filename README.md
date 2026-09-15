@@ -102,9 +102,11 @@ worse, because the two compete for the same cores.
 OdooBench records Locust's CPU warning for every run and prints it next to the
 result, and `odoobench compare` refuses to endorse a comparison where either
 side had it. On our own test server one smoke run dropped from 461 to 231
-requests a second between two runs for exactly this reason. For serious numbers,
-run the generator on a separate machine close to the server, or use Locust's
-distributed mode through the web interface.
+requests a second between two runs for exactly this reason. `--processes 4` spreads
+the users over four Locust processes and lifts the one-core ceiling. It does not
+stop the generator from competing with the server when both share a machine, so
+for numbers you intend to quote, run it on a separate machine close to the
+server.
 
 ## Getting enough data to measure on
 

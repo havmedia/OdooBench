@@ -71,7 +71,10 @@ def to_text(payload: Dict[str, Any]) -> str:
         lines.append("")
         lines.append("  WARNING: the load generator itself ran out of CPU in at least one run.")
         lines.append("  Those numbers may describe this machine rather than the Odoo server.")
-        lines.append("  Run OdooBench on a separate machine, or with fewer users.")
+        if int(settings.get("processes") or 1) <= 1:
+            lines.append("  Try --processes 4, or run OdooBench on a separate machine.")
+        else:
+            lines.append("  Add processes, or run OdooBench on a separate machine.")
 
     buckets = result.get("bucket_p50_ms") or {}
     if len(buckets) > 1:

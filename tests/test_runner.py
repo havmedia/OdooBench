@@ -123,3 +123,14 @@ def test_the_same_seed_draws_the_same_work_on_both_sides():
     shortest = min(len(first), len(second))
     assert shortest > 0
     assert first[:shortest] == second[:shortest]
+
+
+def test_several_generator_processes_share_the_load():
+    with FakeOdoo() as odoo:
+        aggregate = run(
+            scenarios.get("browse"), Target(), _connection(odoo),
+            _config(users=4, processes=2, warmup_seconds=2, duration_seconds=4, runs=1),
+        )
+
+    assert aggregate.runs[0].requests > 0
+    assert "list" in aggregate.bucket_requests()

@@ -75,6 +75,7 @@ def command_run(args: argparse.Namespace) -> int:
         rate=args.rate,
         seed=args.seed,
         timeout=args.timeout,
+        processes=args.processes,
     )
 
     aggregate = run(
@@ -95,6 +96,7 @@ def command_run(args: argparse.Namespace) -> int:
             "duration_seconds": config.duration_seconds,
             "runs": config.runs,
             "rate": config.rate,
+            "processes": config.processes,
             "model": target.model,
             "order": target.order,
             "date_field": target.date_field,
@@ -337,6 +339,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="cap requests per second across all users, to compare latency at equal load",
     )
     run_parser.add_argument("--seed", type=int, default=1234)
+    run_parser.add_argument(
+        "--processes",
+        type=int,
+        default=1,
+        help="Locust processes generating the load; one uses one core, so raise it "
+             "when the report says the generator was CPU-bound",
+    )
     run_parser.add_argument(
         "--spawn-rate",
         dest="spawn_rate",

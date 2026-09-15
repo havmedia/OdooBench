@@ -67,6 +67,12 @@ def to_text(payload: Dict[str, Any]) -> str:
         "   <- a run with errors did not serve the load" if result["errors"] else "",
     ))
 
+    if result.get("generator_saturated"):
+        lines.append("")
+        lines.append("  WARNING: the load generator itself ran out of CPU in at least one run.")
+        lines.append("  Those numbers may describe this machine rather than the Odoo server.")
+        lines.append("  Run OdooBench on a separate machine, or with fewer users.")
+
     buckets = result.get("bucket_p50_ms") or {}
     if len(buckets) > 1:
         lines.append("")

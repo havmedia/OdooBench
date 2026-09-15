@@ -5,7 +5,7 @@ import pytest
 from fake_odoo import FakeOdoo
 from odoobench import report
 from odoobench.cli import build_parser, main
-from odoobench.rpc import Session
+from odoobench.client import OdooClient
 from odoobench.scenario import SCENARIOS, get
 from odoobench.stats import Aggregate, RunSummary
 from odoobench.workload import Target, probe
@@ -58,12 +58,12 @@ def test_an_unknown_scenario_names_the_ones_that_exist():
 
 
 def test_the_probe_reads_the_real_date_range_from_the_instance():
-    class Fixed(Session):
-        def search_read(self, model, domain, fields, limit=80, offset=0, order=""):
+    class Fixed(OdooClient):
+        def search_read(self, model, domain, fields, limit=80, offset=0, order="", name=""):
             value = "2021-03-04" if order.endswith("asc") else "2025-11-30"
             return [{"create_date": value + " 08:00:00"}]
 
-    target = probe(Fixed("http://x", "d", "u", "p"), Target())
+    target = probe(Fixed(None, "http://x", "d", "u", "p"), Target())
 
     assert target.first_date.isoformat() == "2021-03-04"
     assert target.last_date.isoformat() == "2025-11-30"
@@ -82,7 +82,8 @@ def test_a_window_stays_inside_the_known_range():
 
 
 def test_the_text_report_names_the_spread_and_the_blind_spot():
-    runs = [RunSummary(seconds=1, requests=int(v), errors=0, latencies_ms=[10.0]) for v in (100, 120)]
+    runs = [RunSummary(seconds=1, requests=int(v), errors=0, p50_ms=10.0, p95_ms=20.0, p99_ms=30.0)
+            for v in (100, 120)]
     payload = report.envelope(
         "tuned",
         get("browse"),
@@ -155,7 +156,7 @@ def test_the_analysis_fields_are_discovered_from_the_model():
     from odoobench.workload import inspect_analysis
 
     with FakeOdoo() as odoo:
-        session = Session(odoo.url, "demo", "admin", "secret")
+        session = OdooClient.standalone(odoo.url, "demo", "admin", "secret")
         session.authenticate()
         found = inspect_analysis(session, "sale.report")
 
@@ -171,25 +172,60 @@ def test_a_date_field_that_is_never_filled_is_not_chosen():
     # field that is null everywhere makes a report that returns nothing, fast.
     from odoobench.workload import inspect_analysis
 
-    class Sparse(Session):
+    class Sparse(OdooClient):
         def __init__(self):
-            super().__init__("http://x", "d", "u", "p")
+            super().__init__(None, "http://x", "d", "u", "p")
             self.asked = []
 
-        def call_kw(self, model, method, args, kwargs=None):
+        def call_kw(self, model, method, args, kwargs=None, name=""):
             return {
                 "followup_next_action_date": {"type": "date", "store": True},
                 "create_date": {"type": "datetime", "store": True},
                 "parent_id": {"type": "many2one", "store": True},
             }
 
-        def search_read(self, model, domain, fields, limit=80, offset=0, order=""):
-            name = domain[0][0]
-            self.asked.append(name)
-            return [] if name in ("followup_next_action_date", "parent_id") else [{"id": 1}]
+        def search_read(self, model, domain, fields, limit=80, offset=0, order="", name=""):
+            field = domain[0][0]
+            self.asked.append(field)
+            return [] if field in ("followup_next_action_date", "parent_id") else [{"id": 1}]
 
     session = Sparse()
     found = inspect_analysis(session, "res.partner")
 
     assert "followup_next_action_date" in session.asked
     assert found["date_field"] == "create_date"
+
+
+def test_a_saturated_load_generator_is_called_out_in_the_report():
+    runs = [
+        RunSummary(seconds=1, requests=100, errors=0, p50_ms=10.0, p95_ms=20.0, p99_ms=30.0),
+        RunSummary(seconds=1, requests=60, errors=0, p50_ms=10.0, p95_ms=20.0, p99_ms=30.0,
+                   generator_saturated=True),
+    ]
+    payload = report.envelope(
+        "busy", get("browse"), Aggregate(runs=runs),
+        {"concurrency": 4, "runs": 2, "duration_seconds": 60, "warmup_seconds": 30, "rate": 0},
+    )
+
+    assert payload["result"]["generator_saturated"] is True
+    assert "load generator itself ran out of CPU" in report.to_text(payload)
+
+
+def test_compare_refuses_to_bless_a_side_with_a_saturated_generator(tmp_path, capsys):
+    def write(name, values, saturated):
+        path = tmp_path / name
+        path.write_text(json.dumps({
+            "label": name,
+            "scenario": {"blind_to": "write load"},
+            "result": {
+                "median": {"rps": values[1]},
+                "runs": [{"rps": v} for v in values],
+                "bucket_p50_ms": {},
+                "generator_saturated": saturated,
+            },
+        }))
+        return str(path)
+
+    main(["compare", write("a", [50.0, 55.0, 60.0], False), write("b", [400.0, 410.0, 420.0], True)])
+
+    assert "Do not quote" in capsys.readouterr().out

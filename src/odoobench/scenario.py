@@ -44,7 +44,13 @@ def _office_day(target: Target) -> List[Operation]:
 
 
 def _month_end(target: Target) -> List[Operation]:
-    return [workload.grouped_report(target, groupby=target.date_field + ":month")]
+    grouped = Target(**{**target.__dict__})
+    grouped.analysis_model = target.model
+    grouped.analysis_date_field = target.date_field
+    grouped.analysis_dimension = ""
+    grouped.analysis_measures = []
+    grouped.analysis_months = 1
+    return [workload.trend(grouped)]
 
 
 def _flat(target: Target) -> List[Operation]:

@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "odoobench"
-version = "0.1.0"
+version = "0.2.0"
 description = "Measure an Odoo the way its own web client uses it."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "hav.media", email = "hallo@hav.media" }]
-keywords = ["odoo", "benchmark", "load-testing", "postgresql", "performance"]
+keywords = ["odoo", "locust", "benchmark", "load-testing", "postgresql", "performance"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: System Administrators",
@@ -18,7 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: System :: Benchmark",
 ]
-dependencies = []
+dependencies = ["locust>=2.20"]
 
 [project.urls]
 Homepage = "https://github.com/havmedia/odoobench"

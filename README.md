@@ -8,7 +8,7 @@ those a server gets through, how long they took, and whether a change you made
 actually moved anything. Every scenario also states what it *cannot* see, because
 that is where most Odoo benchmarks go wrong.
 
-No dependencies. Python 3.9 and up. It runs on the server you are measuring.
+Built on [Locust](https://locust.io). Python 3.9 and up.
 
 ## Why this exists
 
@@ -35,11 +35,10 @@ to trust its numbers.
 ## Install
 
 ```
-pip install git+https://github.com/havmedia/odoobench
+pip install git+https://github.com/havmedia/OdooBench
 ```
 
-Or copy the `src/odoobench` directory onto the server and run `python3 -m odoobench`.
-There is nothing to install for it.
+This installs Locust with it.
 
 ## Use
 
@@ -57,11 +56,55 @@ odoobench run --url http://10.0.0.5:8069 --db production --login admin \
 odoobench compare before.json after.json
 ```
 
-The password comes from `--password` or the `ODOOBENCH_PASSWORD` environment
-variable. Point it at a copy of production, not at production.
+`odoobench run` starts Locust without its web interface, runs the scenario
+several times and writes a result file. The password comes from `--password` or
+the `ODOOBENCH_PASSWORD` environment variable. Point it at a copy of production, not at production.
 
 `odoobench run` first asks the instance for the date range its records actually
 cover, so the filters it generates hit real data instead of an empty window.
+
+## Two ways to run it
+
+Both use the same scenarios and the same Locust user class, so they generate the
+same load. They answer different questions.
+
+**Explore with Locust's web interface.** Ramp users up until the server bends,
+watch the chart, keep it running while somebody changes something:
+
+```
+locust -f locustfile.py --host http://10.0.0.5:8069 \
+       --odoo-db production --odoo-password secret --scenario office-day
+```
+
+Then open http://localhost:8089. Distributed mode, ramp-up shapes and everything
+else Locust offers work as usual.
+
+**Conclude with `odoobench run`.** Locust reports one number per test. It cannot
+tell you whether a difference between two of its runs is real, because it has
+nothing to compare the difference with. `odoobench run` repeats each
+configuration, keeps the runs apart, and `odoobench compare` refuses to call a
+difference real when the runs of the two sides overlap. Use the web interface to
+find out what is going on and the command when the answer has to survive being
+quoted at somebody.
+
+**One thing both get right that plain Locust would not:** Odoo reports its errors
+inside a 200 response. A stock Locust test counts a server that answers every
+request with "internal error" as a server answering every request. OdooBench
+reads each response and marks those failed.
+
+### Where to run the load generator
+
+Locust runs one Python process, which uses one CPU core. Past a few hundred
+requests a second that core is full, and from then on the generator sets the
+pace rather than the server. Running it on the Odoo server itself makes this
+worse, because the two compete for the same cores.
+
+OdooBench records Locust's CPU warning for every run and prints it next to the
+result, and `odoobench compare` refuses to endorse a comparison where either
+side had it. On our own test server one smoke run dropped from 461 to 231
+requests a second between two runs for exactly this reason. For serious numbers,
+run the generator on a separate machine close to the server, or use Locust's
+distributed mode through the web interface.
 
 ## Getting enough data to measure on
 

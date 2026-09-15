@@ -1,26 +1,26 @@
 import pytest
 
 from fake_odoo import FakeOdoo
-from odoobench.rpc import RpcError, Session
+from odoobench.client import OdooClient, OdooError
 
 
 def test_authenticates_and_keeps_the_session():
     with FakeOdoo() as odoo:
-        session = Session(odoo.url, "demo", "admin", "secret")
+        session = OdooClient.standalone(odoo.url, "demo", "admin", "secret")
         assert session.authenticate() == 2
         assert odoo.calls[0]["path"] == "/web/session/authenticate"
 
 
 def test_a_wrong_password_is_an_error_not_an_empty_result():
     with FakeOdoo() as odoo:
-        session = Session(odoo.url, "demo", "admin", "wrong")
-        with pytest.raises(RpcError, match="authentication failed"):
+        session = OdooClient.standalone(odoo.url, "demo", "admin", "wrong")
+        with pytest.raises(OdooError, match="authentication failed"):
             session.authenticate()
 
 
 def test_search_read_sends_what_the_web_client_sends():
     with FakeOdoo() as odoo:
-        session = Session(odoo.url, "demo", "admin", "secret")
+        session = OdooClient.standalone(odoo.url, "demo", "admin", "secret")
         session.authenticate()
         session.search_read(
             "res.partner", [["active", "=", True]], ["display_name"], limit=80, offset=160,
@@ -40,13 +40,13 @@ def test_search_read_sends_what_the_web_client_sends():
 
 def test_an_error_inside_a_200_response_is_raised():
     with FakeOdoo(fail_every=1) as odoo:
-        session = Session(odoo.url, "demo", "admin", "secret")
+        session = OdooClient.standalone(odoo.url, "demo", "admin", "secret")
         session.authenticate()
-        with pytest.raises(RpcError, match="busy"):
+        with pytest.raises(OdooError, match="busy"):
             session.search_count("res.partner", [])
 
 
 def test_an_unreachable_server_is_an_rpc_error_not_a_traceback():
-    session = Session("http://127.0.0.1:1", "demo", "admin", "secret", timeout=1)
-    with pytest.raises(RpcError):
+    session = OdooClient.standalone("http://127.0.0.1:1", "demo", "admin", "secret", timeout=1)
+    with pytest.raises(OdooError):
         session.authenticate()

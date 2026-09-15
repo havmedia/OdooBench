@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from . import report, scenario as scenarios, workload
 from .compare import bucket_lines, compare
-from .rpc import RpcError, Session
-from .runner import RunConfig, run
+from .client import OdooClient, OdooError
+from .runner import Connection, RunConfig, run
 from .workload import Target
 
 
@@ -27,28 +27,25 @@ def _target_from(args: argparse.Namespace) -> Target:
     return target
 
 
-def _session_factory(args: argparse.Namespace):
-    def make() -> Session:
-        return Session(
-            url=args.url,
-            db=args.db,
-            login=args.login,
-            password=args.password,
-            timeout=args.timeout,
-        )
+def _connection(args: argparse.Namespace) -> Connection:
+    return Connection(url=args.url, db=args.db, login=args.login, password=args.password)
 
-    return make
+
+def _lookup_client(args: argparse.Namespace) -> OdooClient:
+    """A plain client for the questions asked before any load is generated."""
+    return OdooClient.standalone(
+        url=args.url, db=args.db, login=args.login, password=args.password, timeout=args.timeout
+    )
 
 
 def command_run(args: argparse.Namespace) -> int:
     chosen = scenarios.get(args.scenario)
-    factory = _session_factory(args)
     target = _target_from(args)
 
-    probe_session = factory()
+    probe_session = _lookup_client(args)
     try:
         probe_session.authenticate()
-    except RpcError as exc:
+    except OdooError as exc:
         print("could not log in: %s" % exc, file=sys.stderr)
         return 2
 
@@ -61,7 +58,7 @@ def command_run(args: argparse.Namespace) -> int:
                 % (target.model, target.first_date, target.last_date),
                 file=sys.stderr,
             )
-        except RpcError as exc:
+        except OdooError as exc:
             print("  probe failed (%s), keeping the given range" % exc, file=sys.stderr)
 
     if args.scenario.startswith("document"):
@@ -70,7 +67,8 @@ def command_run(args: argparse.Namespace) -> int:
         target = _prepare_analysis(probe_session, target, args)
 
     config = RunConfig(
-        concurrency=args.users,
+        users=args.users,
+        spawn_rate=args.spawn_rate,
         warmup_seconds=args.warmup,
         duration_seconds=args.duration,
         runs=args.runs,
@@ -82,7 +80,7 @@ def command_run(args: argparse.Namespace) -> int:
     aggregate = run(
         chosen,
         target,
-        factory,
+        _connection(args),
         config,
         on_progress=lambda message: print(message, file=sys.stderr),
     )
@@ -92,12 +90,11 @@ def command_run(args: argparse.Namespace) -> int:
         scenario=chosen,
         aggregate=aggregate,
         settings={
-            "concurrency": config.concurrency,
+            "concurrency": config.users,
             "warmup_seconds": config.warmup_seconds,
             "duration_seconds": config.duration_seconds,
             "runs": config.runs,
             "rate": config.rate,
-            "seed": config.seed,
             "model": target.model,
             "order": target.order,
             "date_field": target.date_field,
@@ -115,7 +112,7 @@ def command_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _prepare_document(session: Session, target: Target, args: argparse.Namespace) -> Target:
+def _prepare_document(session: OdooClient, target: Target, args: argparse.Namespace) -> Target:
     """Find the report, its model and enough records to draw from."""
     if not args.document:
         raise SystemExit(
@@ -124,7 +121,7 @@ def _prepare_document(session: Session, target: Target, args: argparse.Namespace
         )
     try:
         found = workload.find_document(session, args.document)
-    except (LookupError, RpcError) as exc:
+    except (LookupError, OdooError) as exc:
         raise SystemExit(str(exc))
 
     model = found.get("model") or ""
@@ -150,7 +147,7 @@ def _prepare_document(session: Session, target: Target, args: argparse.Namespace
     return target
 
 
-def _prepare_analysis(session: Session, target: Target, args: argparse.Namespace) -> Target:
+def _prepare_analysis(session: OdooClient, target: Target, args: argparse.Namespace) -> Target:
     """Ask the analysis model what it can be grouped by, unless told."""
     if not args.analysis:
         raise SystemExit(
@@ -159,7 +156,7 @@ def _prepare_analysis(session: Session, target: Target, args: argparse.Namespace
         )
     try:
         found = workload.inspect_analysis(session, args.analysis)
-    except RpcError as exc:
+    except OdooError as exc:
         raise SystemExit("cannot read the fields of %r: %s" % (args.analysis, exc))
 
     target.analysis_model = args.analysis
@@ -190,10 +187,10 @@ def _prepare_analysis(session: Session, target: Target, args: argparse.Namespace
 
 def command_analyses(args: argparse.Namespace) -> int:
     """List the analysis models this instance has, and whether they hold data."""
-    session = _session_factory(args)()
+    session = _lookup_client(args)
     try:
         session.authenticate()
-    except RpcError as exc:
+    except OdooError as exc:
         print("could not log in: %s" % exc, file=sys.stderr)
         return 2
 
@@ -214,7 +211,7 @@ def command_analyses(args: argparse.Namespace) -> int:
         try:
             sample = session.search_read(model, [], ["id"], limit=1, order="")
             state = "yes" if sample else "no"
-        except RpcError:
+        except OdooError:
             state = "-"
         print("%-42s %-30s %s" % (model, (row.get("name") or "")[:30], state))
     print("")
@@ -224,10 +221,10 @@ def command_analyses(args: argparse.Namespace) -> int:
 
 def command_documents(args: argparse.Namespace) -> int:
     """List what this instance can print, and whether it has anything to print."""
-    session = _session_factory(args)()
+    session = _lookup_client(args)
     try:
         session.authenticate()
-    except RpcError as exc:
+    except OdooError as exc:
         print("could not log in: %s" % exc, file=sys.stderr)
         return 2
 
@@ -245,7 +242,7 @@ def command_documents(args: argparse.Namespace) -> int:
         if model and model not in counts:
             try:
                 counts[model] = int(session.search_count(model, []) or 0)
-            except RpcError:
+            except OdooError:
                 counts[model] = -1
 
     print("%-46s %-24s %10s" % ("report", "prints", "records"))
@@ -277,6 +274,12 @@ def command_compare(args: argparse.Namespace) -> int:
         print("  typical wait per parameter:")
         for line in lines:
             print(line)
+
+    if before["result"].get("generator_saturated") or after["result"].get("generator_saturated"):
+        print("")
+        print("WARNING: the load generator ran out of CPU on at least one side. That side")
+        print("measured the machine OdooBench ran on as much as the server. Do not quote")
+        print("this comparison until both sides were run without that warning.")
 
     if not verdict.separated:
         print("")
@@ -331,9 +334,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--rate",
         type=float,
         default=0.0,
-        help="cap total requests per second, to compare latency at equal load",
+        help="cap requests per second across all users, to compare latency at equal load",
     )
     run_parser.add_argument("--seed", type=int, default=1234)
+    run_parser.add_argument(
+        "--spawn-rate",
+        dest="spawn_rate",
+        type=float,
+        default=0.0,
+        help="users started per second; 0 starts them all at once",
+    )
     run_parser.add_argument("--timeout", type=int, default=300)
     run_parser.add_argument("--model", default="res.partner")
     run_parser.add_argument("--fields", default="", help="comma separated")

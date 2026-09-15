@@ -1,32 +1,21 @@
-from odoobench.stats import Aggregate, Range, RunSummary, percentile
+from odoobench.stats import Aggregate, Bucket, Range, RunSummary
 
 
-def test_percentile_of_an_empty_sample_is_zero_not_a_crash():
-    assert percentile([], 0.95) == 0.0
-
-
-def test_percentile_picks_the_ordered_value():
-    assert percentile([5, 1, 4, 2, 3], 0.5) == 3
-    assert percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.95) == 10
+def _run(requests, seconds=1.0, errors=0, buckets=None, p50=10.0):
+    return RunSummary(
+        seconds=seconds, requests=requests, errors=errors,
+        p50_ms=p50, p95_ms=p50 * 2, p99_ms=p50 * 3, buckets=buckets or {},
+    )
 
 
 def test_a_run_reports_failed_requests_separately_from_served_ones():
-    run = RunSummary(seconds=10, requests=90, errors=10, latencies_ms=[1.0] * 90)
+    run = _run(requests=90, seconds=10, errors=10)
     assert run.rps == 9.0
     assert run.error_share == 10.0
 
 
-def _aggregate(*rps_values):
-    return Aggregate(
-        runs=[
-            RunSummary(seconds=1, requests=int(value), errors=0, latencies_ms=[10.0] * int(value))
-            for value in rps_values
-        ]
-    )
-
-
 def test_the_aggregate_keeps_the_spread_of_its_runs():
-    aggregate = _aggregate(100, 120, 110)
+    aggregate = Aggregate(runs=[_run(100), _run(120), _run(110)])
     assert aggregate.rps == 110.0
     assert aggregate.rps_range == Range(100.0, 120.0)
 
@@ -36,19 +25,11 @@ def test_ranges_that_touch_count_as_overlapping():
     assert not Range(1.0, 2.0).overlaps(Range(2.1, 3.0))
 
 
-def test_the_per_bucket_median_survives_a_mixed_workload():
-    # The aggregate median hides the expensive parameter when the cheap one is
-    # the common case. The per-bucket view is what keeps it visible.
-    cheap = [10.0] * 99
-    dear = [5000.0]
+def test_the_per_request_median_survives_a_mixed_workload():
+    # The overall median hides the expensive request when the cheap one is the
+    # common case. The per-name view is what keeps it visible.
     runs = [
-        RunSummary(
-            seconds=1,
-            requests=100,
-            errors=0,
-            latencies_ms=cheap + dear,
-            by_bucket_ms={"list": list(cheap), "filter_1d": list(dear)},
-        )
+        _run(100, buckets={"list": Bucket(99, 10.0, 12.0), "filter_1d": Bucket(1, 5000.0, 5000.0)})
         for _ in range(3)
     ]
     aggregate = Aggregate(runs=runs)

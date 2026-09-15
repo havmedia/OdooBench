@@ -81,8 +81,10 @@ def to_text(payload: Dict[str, Any]) -> str:
         lines.append("")
         lines.append("  WARNING: in at least one run no request finished for %d seconds." % longest)
         lines.append("  Requests that hang count as neither success nor failure, so the")
-        lines.append("  average above looks tidier than the run was. Something between the")
-        lines.append("  generator and Odoo stopped passing traffic; find it before trusting this.")
+        lines.append("  average above hides it. Two causes look identical from here: the path")
+        lines.append("  between generator and Odoo stopped passing traffic, or every Odoo worker")
+        lines.append("  was busy with slow requests and answered nothing. The first is a broken")
+        lines.append("  measurement, the second is the result. Check the server to tell which.")
 
     buckets = result.get("bucket_p50_ms") or {}
     if len(buckets) > 1:

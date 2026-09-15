@@ -285,9 +285,10 @@ def command_compare(args: argparse.Namespace) -> int:
 
     if before["result"].get("stalled") or after["result"].get("stalled"):
         print("")
-        print("WARNING: traffic stopped flowing for a while on at least one side. A stalled")
-        print("run reports an average over time in which nothing happened. Do not quote")
-        print("this comparison until both sides ran without a stall.")
+        print("WARNING: on at least one side, nothing finished for a while. That is either a")
+        print("broken path between generator and Odoo, or a server so busy it answered")
+        print("nothing. Only the second belongs in a comparison, and only once the server")
+        print("side has shown it was the cause.")
 
     if not verdict.separated:
         print("")

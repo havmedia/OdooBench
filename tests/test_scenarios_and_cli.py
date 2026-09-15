@@ -246,4 +246,4 @@ def test_a_stalled_run_is_called_out_in_the_report_and_refused_in_compare(tmp_pa
     broken = tmp_path / "broken.json"
     broken.write_text(json.dumps(payload))
     main(["compare", str(clean), str(broken)])
-    assert "traffic stopped flowing" in capsys.readouterr().out
+    assert "nothing finished for a while" in capsys.readouterr().out

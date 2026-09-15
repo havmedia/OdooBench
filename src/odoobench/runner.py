@@ -155,9 +155,11 @@ def _measure(
     runs: List[RunSummary] = []
     for index in range(config.runs):
         announce("run %d of %d, %d s" % (index + 1, config.runs, config.duration_seconds))
-        started = time.monotonic()
+        started, wall_start = time.monotonic(), time.time()
         gevent.sleep(config.duration_seconds)
-        summary = from_locust(environment.stats, time.monotonic() - started)
+        summary = from_locust(
+            environment.stats, time.monotonic() - started, wall_start, time.time()
+        )
         summary.generator_saturated = saturated()
         environment.stats.reset_all()
         announce(
@@ -165,7 +167,12 @@ def _measure(
             % (
                 summary.rps,
                 summary.errors,
-                "  <- load generator was CPU-bound" if summary.generator_saturated else "",
+                ("  <- load generator was CPU-bound" if summary.generator_saturated else "")
+                + (
+                    "  <- nothing finished for %d s" % summary.longest_gap_seconds
+                    if summary.stalled
+                    else ""
+                ),
             )
         )
         runs.append(summary)

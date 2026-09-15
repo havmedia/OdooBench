@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+#: A stretch this long without a single finished request means the load stopped
+#: flowing. Requests that hang are neither successes nor failures to Locust, so
+#: without this a stalled run reports a tidy average and no errors.
+STALL_SECONDS = 5
 
 
 @dataclass
@@ -42,6 +47,12 @@ class RunSummary:
     #: Locust's own CPU ran above 90% during this run. The generator, not the
     #: server, may have set the pace, and then the number measures the wrong box.
     generator_saturated: bool = False
+    #: The longest stretch, in whole seconds, in which no request finished.
+    longest_gap_seconds: int = 0
+
+    @property
+    def stalled(self) -> bool:
+        return self.longest_gap_seconds >= STALL_SECONDS
 
     @property
     def rps(self) -> float:
@@ -64,6 +75,8 @@ class RunSummary:
             "p95_ms": self.p95_ms,
             "p99_ms": self.p99_ms,
             "generator_saturated": self.generator_saturated,
+            "longest_gap_seconds": self.longest_gap_seconds,
+            "stalled": self.stalled,
             "buckets": {name: bucket.as_dict() for name, bucket in sorted(self.buckets.items())},
         }
 
@@ -130,6 +143,7 @@ class Aggregate:
             "requests": self.requests,
             "errors": self.errors,
             "generator_saturated": any(run.generator_saturated for run in self.runs),
+            "stalled": any(run.stalled for run in self.runs),
             "bucket_p50_ms": self.bucket_p50(),
             "bucket_requests": self.bucket_requests(),
             "runs": [run.as_dict() for run in self.runs],
@@ -148,7 +162,29 @@ class Range:
         return "%.2f..%.2f" % (self.low, self.high)
 
 
-def from_locust(stats: Any, seconds: float) -> RunSummary:
+def longest_gap(per_second: Dict[int, int], window_start: float, window_end: float) -> int:
+    """Longest run of seconds inside the window in which nothing finished.
+
+    The first second and the last two are left out: the window rarely starts on
+    a second boundary, and worker processes report up to a second late.
+    """
+    first, last = int(window_start) + 1, int(window_end) - 2
+    longest = current = 0
+    for second in range(first, last + 1):
+        if per_second.get(second, 0):
+            current = 0
+        else:
+            current += 1
+            longest = max(longest, current)
+    return longest
+
+
+def from_locust(
+    stats: Any,
+    seconds: float,
+    window_start: Optional[float] = None,
+    window_end: Optional[float] = None,
+) -> RunSummary:
     """Turn Locust's statistics for the window just finished into one run.
 
     Requests per second is counted here rather than taken from Locust, because
@@ -175,4 +211,9 @@ def from_locust(stats: Any, seconds: float) -> RunSummary:
         p99_ms=round(total.get_response_time_percentile(0.99) or 0.0, 1),
         buckets=buckets,
         error_examples=[str(error.error)[:160] for error in list(stats.errors.values())[:3]],
+        longest_gap_seconds=(
+            longest_gap(dict(total.num_reqs_per_sec), window_start, window_end)
+            if window_start is not None and window_end is not None
+            else 0
+        ),
     )

@@ -283,6 +283,12 @@ def command_compare(args: argparse.Namespace) -> int:
         print("measured the machine OdooBench ran on as much as the server. Do not quote")
         print("this comparison until both sides were run without that warning.")
 
+    if before["result"].get("stalled") or after["result"].get("stalled"):
+        print("")
+        print("WARNING: traffic stopped flowing for a while on at least one side. A stalled")
+        print("run reports an average over time in which nothing happened. Do not quote")
+        print("this comparison until both sides ran without a stall.")
+
     if not verdict.separated:
         print("")
         print("The runs of the two configurations overlap. Whatever changed between")

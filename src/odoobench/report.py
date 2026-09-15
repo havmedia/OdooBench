@@ -76,6 +76,14 @@ def to_text(payload: Dict[str, Any]) -> str:
         else:
             lines.append("  Add processes, or run OdooBench on a separate machine.")
 
+    if result.get("stalled"):
+        longest = max((run.get("longest_gap_seconds", 0) for run in result["runs"]), default=0)
+        lines.append("")
+        lines.append("  WARNING: in at least one run no request finished for %d seconds." % longest)
+        lines.append("  Requests that hang count as neither success nor failure, so the")
+        lines.append("  average above looks tidier than the run was. Something between the")
+        lines.append("  generator and Odoo stopped passing traffic; find it before trusting this.")
+
     buckets = result.get("bucket_p50_ms") or {}
     if len(buckets) > 1:
         lines.append("")

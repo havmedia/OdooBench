@@ -229,3 +229,21 @@ def test_compare_refuses_to_bless_a_side_with_a_saturated_generator(tmp_path, ca
     main(["compare", write("a", [50.0, 55.0, 60.0], False), write("b", [400.0, 410.0, 420.0], True)])
 
     assert "Do not quote" in capsys.readouterr().out
+
+
+def test_a_stalled_run_is_called_out_in_the_report_and_refused_in_compare(tmp_path, capsys):
+    stalled = RunSummary(seconds=60, requests=5400, errors=0, p50_ms=50.0, p95_ms=60.0, p99_ms=70.0,
+                         longest_gap_seconds=45)
+    payload = report.envelope(
+        "mac", get("browse"), Aggregate(runs=[stalled]),
+        {"concurrency": 20, "runs": 1, "duration_seconds": 60, "warmup_seconds": 0, "rate": 0},
+    )
+    assert "no request finished for 45 seconds" in report.to_text(payload)
+
+    clean = tmp_path / "clean.json"
+    clean.write_text(json.dumps({"label": "clean", "scenario": {"blind_to": "x"},
+                                 "result": {"median": {"rps": 80.0}, "runs": [{"rps": 80.0}], "bucket_p50_ms": {}}}))
+    broken = tmp_path / "broken.json"
+    broken.write_text(json.dumps(payload))
+    main(["compare", str(clean), str(broken)])
+    assert "traffic stopped flowing" in capsys.readouterr().out
